@@ -1,0 +1,31 @@
+# Binaries
+k8s-agent
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+coverage.out
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local config
+config.bak.yaml
+*.local.yaml
+
+# Claude
+.claude/
+.agents/
+skills-lock.json
