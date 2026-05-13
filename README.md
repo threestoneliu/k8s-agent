@@ -1,13 +1,13 @@
 # K8s-Agent
 
-A conversational Kubernetes agent with human-in-the-loop approvals.
+A conversational Kubernetes CLI tool powered by LLM with natural language interface.
 
 ## Features
 
-- Multi-cluster support - manage multiple Kubernetes clusters
-- Natural language interface - query and mutate resources using simple commands
-- Human-in-the-loop for mutations - destructive operations require explicit confirmation
-- Scheduled inspection tasks - automate recurring cluster inspections
+- **Natural language interface** - Query and manage Kubernetes clusters using plain English
+- **Multi-cluster support** - Manage multiple Kubernetes clusters seamlessly
+- **Function calling** - LLM calls Kubernetes APIs directly via function definitions
+- **Interactive TUI** - Bubble Tea-based terminal interface with streaming responses
 
 ## Installation
 
@@ -18,17 +18,20 @@ go install ./cmd/k8s-agent
 Or build from source:
 
 ```bash
-git clone https://github.com/your-org/k8s-agent.git
+git clone git@github.com:threestoneliu/k8s-agent.git
 cd k8s-agent
 go build -o k8s-agent ./cmd/k8s-agent
 ```
 
 ## Quick Start
 
-### 1. Add a cluster
+### 1. Configure your clusters
 
 ```bash
+# Add a cluster (copies kubeconfig entry to ~/.config/k8s-agent/kubeconfigs/)
 k8s-agent cluster add dev ~/.kube/config
+
+# Set default cluster
 k8s-agent cluster use dev
 ```
 
@@ -38,142 +41,126 @@ k8s-agent cluster use dev
 k8s-agent chat
 ```
 
-### 3. Execute commands
+### 3. Query in natural language
 
-**Query operations (direct execution):**
 ```
-> get pods
-> list services
-> describe pod nginx
+> what pods are running?
+> list services in default namespace
+> show me the nodes
+> get deployment nginx
 ```
 
-**Mutation operations (require confirmation):**
+### 4. Manage resources
+
 ```
 > delete pod nginx
-Confirmation required: ABC123
-Use 'k8s-agent confirm ABC123' to approve
-```
-
-### 4. Approve mutations
-
-```bash
-k8s-agent confirm ABC123
+> scale deployment web to 3 replicas
+> create configmap app-config from file config.yaml
 ```
 
 ## Commands
 
 ### Chat Mode
-```
+
+```bash
 k8s-agent chat
 ```
 
-### Query Operations
-```
-k8s-agent get <resource> [name] [-n namespace]
-k8s-agent list <resource> [-n namespace]
-k8s-agent describe <resource> <name> [-n namespace]
-```
-
-### Mutation Operations
-```
-k8s-agent delete <resource> <name> [-n namespace]
-k8s-agent create <resource> <name> [--flags]
-k8s-agent scale <resource> <name> --replicas=N
-```
-
 ### Cluster Management
-```
+
+```bash
 k8s-agent cluster list
 k8s-agent cluster add <name> <kubeconfig-path>
 k8s-agent cluster use <name>
 k8s-agent cluster remove <name>
 ```
 
-### Task Management
-```
-k8s-agent task list
-k8s-agent task create <name> <cron> <operation>
-k8s-agent task delete <id>
-k8s-agent task run <id>
-k8s-agent task results <id>
-```
+### Available Functions
 
-### Confirmation
-```
-k8s-agent confirm <key>
-```
+The LLM has access to these functions:
+
+| Function | Description |
+|----------|-------------|
+| `resource_list` | List Kubernetes resources with optional label/field selectors |
+| `resource_get` | Get details of a specific resource |
+| `get_apiresources` | List all supported API resource types |
+| `use_cluster` | Switch to a different cluster |
 
 ## Configuration
 
-- **Kubeconfig**: `~/.kube/config` or specify path via `cluster add`
-- **Confirmation TTL**: 5 minutes (configurable)
-- **Session history**: Stored in memory (current session only)
+Create `~/.config/k8s-agent/config.yaml`:
 
-## Operation Classification
+```yaml
+current-cluster: "dev"
 
-### Query Operations (Direct Execution)
-These operations are read-only and execute immediately:
-- `get` - Retrieve specific resource
-- `list` - List resources
-- `describe` - Show resource details
-- `watch` - Watch for changes
-- `logs` - View pod logs
-- `exec` - Execute command in pod
+llm:
+  provider: "openai"
+  api-key: "${OPENAI_API_KEY}"  # or set directly
+  model: "gpt-4"
 
-### Mutation Operations (Require Confirmation)
-These operations modify resources and require explicit approval:
-- `create` - Create new resources
-- `update` - Update existing resources
-- `patch` - Patch resources
-- `delete` - Delete resources
-- `scale` - Scale deployments
-- `cordon` / `uncordon` - Node maintenance
-- `drain` - Drain nodes
+context:
+  max-messages: 20
+  max-tokens: 8000
+  summary-enabled: true
 
-### High-Risk Resources
-Operations on these resources always require confirmation regardless of verb:
-- `nodes`
-- `persistentvolumes`
-- `namespaces`
-- `storageclasses`
+session:
+  storage-path: "~/.config/k8s-agent/sessions"
+  max-cache-size: 100
+  max-sessions: 10
 
-## Examples
-
-### Query pods in default namespace
-```
-k8s-agent get pods
+logging:
+  level: "info"
+  format: "text"
 ```
 
-### Query pods in specific namespace
-```
-k8s-agent get pods -n kube-system
-```
+### Environment Variables
 
-### Describe a specific pod
-```
-k8s-agent describe pod nginx
-```
-
-### Delete a pod (requires confirmation)
-```
-k8s-agent delete pod nginx
-# Output: Confirmation key: XYZ789
-# Then: k8s-agent confirm XYZ789
-```
-
-### Scale a deployment
-```
-k8s-agent scale deployment myapp --replicas=5
-```
-
-### Create a scheduled task
-```
-k8s-agent task create daily-pod-check "0 8 * * *" "get pods"
-```
+| Variable | Description |
+|----------|-------------|
+| `OPENAI_API_KEY` | OpenAI API key |
+| `K8S_AGENT_CONFIG` | Path to config file |
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md) for detailed system design.
+```
+User Input (TUI)
+    ↓
+┌─────────────────────────────────────────┐
+│  pkg/agent - Agent loop                  │
+│  - Handles /clusters, /cluster, /config │
+│  - Manages session context               │
+│  - Streams LLM responses                 │
+└─────────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────────┐
+│  pkg/llm - LLM Integration             │
+│  - OpenAI SDK integration               │
+│  - Function definitions & handlers       │
+│  - Auto-registers resource functions    │
+└─────────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────────┐
+│  pkg/k8s - Kubernetes Executor          │
+│  - Dynamic client for all resources    │
+│  - Resource discovery & caching          │
+│  - List/Get with selectors              │
+└─────────────────────────────────────────┘
+    ↓
+Kubernetes API Server
+```
+
+## Development
+
+```bash
+# Run tests
+go test ./...
+
+# Build
+go build -o k8s-agent ./cmd/k8s-agent
+
+# Run with debug logging
+K8S_AGENT_LOG_LEVEL=debug ./k8s-agent chat
+```
 
 ## License
 
