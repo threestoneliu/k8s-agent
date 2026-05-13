@@ -1,55 +1,64 @@
 package agent
 
 import (
-	"context"
-	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s-agent/pkg/session"
+	sharedutil "k8s-agent/pkg/shared"
 	"k8s-agent/pkg/ui"
 )
 
-// mockUI implements ui.UI for testing
-type mockUI struct {
-	messages    []*session.Message
-	progresses  []ui.Progress
-	doneCalled  bool
-	errorCalled bool
-	lastError   error
-	clusterName string
+// mockStore implements session.StoreInterface for testing
+type mockStore struct {
+	conversations map[string]*session.Conversation
 }
 
-func (m *mockUI) SendMessage(msg *session.Message) {
-	m.messages = append(m.messages, msg)
+func (m *mockStore) GetConversation(id string) (*session.Conversation, error) {
+	if conv, ok := m.conversations[id]; ok {
+		return conv, nil
+	}
+	return nil, nil
 }
 
-func (m *mockUI) SendProgress(progress ui.Progress) {
-	m.progresses = append(m.progresses, progress)
+func (m *mockStore) CreateConversation(id, clusterName, namespace string) (*session.Conversation, error) {
+	conv := &session.Conversation{
+		ID:          id,
+		ClusterName: clusterName,
+		Namespace:   namespace,
+		Messages:    []*session.Message{},
+	}
+	m.conversations[id] = conv
+	return conv, nil
 }
 
-func (m *mockUI) Done() {
-	m.doneCalled = true
+func (m *mockStore) UpdateConversation(id string, update func(*session.Conversation) error) (*session.Conversation, error) {
+	conv, ok := m.conversations[id]
+	if !ok {
+		conv, _ = m.CreateConversation(id, "", "")
+	}
+	return conv, update(conv)
 }
 
-func (m *mockUI) Error(err error) {
-	m.errorCalled = true
-	m.lastError = err
+func (m *mockStore) ListConversations() []*session.Conversation {
+	result := make([]*session.Conversation, 0, len(m.conversations))
+	for _, conv := range m.conversations {
+		result = append(result, conv)
+	}
+	return result
 }
 
-func (m *mockUI) ClusterName() string {
-	return m.clusterName
-}
-
-func (m *mockUI) SetClusterName(clusterName string) {
-	m.clusterName = clusterName
+func (m *mockStore) DeleteConversation(id string) error {
+	delete(m.conversations, id)
+	return nil
 }
 
 func TestNewAgent_WithStore(t *testing.T) {
 	store := &mockStore{
 		conversations: make(map[string]*session.Conversation),
 	}
-	agent := NewAgent(nil, nil, nil, store, "test-session", "test-cluster", nil)
+	agent := NewAgent(nil, nil, store, "test-session", "test-cluster", nil)
 
 	if agent == nil {
 		t.Fatal("NewAgent should not return nil")
@@ -66,7 +75,7 @@ func TestNewAgent_WithStore(t *testing.T) {
 }
 
 func TestNewAgent_WithoutStore(t *testing.T) {
-	agent := NewAgent(nil, nil, nil, nil, "test-session", "prod-cluster", nil)
+	agent := NewAgent(nil, nil, nil, "test-session", "prod-cluster", nil)
 
 	if agent == nil {
 		t.Fatal("NewAgent should not return nil")
@@ -79,48 +88,59 @@ func TestNewAgent_WithoutStore(t *testing.T) {
 	}
 }
 
-func TestAgent_ProcessInput_NilUI(t *testing.T) {
-	agent := NewAgent(nil, nil, nil, nil, "test-session", "default", nil)
+func TestAgent_Run_CloseInput(t *testing.T) {
+	agent := NewAgent(nil, nil, nil, "test-session", "default", nil)
 
-	err := agent.ProcessInput(context.Background(), "hello", nil)
-	if err == nil {
-		t.Error("expected error when ui is nil")
-	}
-	if !strings.Contains(err.Error(), "ui interface is required") {
-		t.Errorf("expected 'ui interface is required' error, got: %v", err)
+	inputChan := make(chan ui.Input, 10)
+	outputChan := make(chan ui.Output, 10)
+
+	// Close input channel immediately
+	close(inputChan)
+
+	// Start agent - should exit when input channel is closed
+	done := make(chan struct{})
+	go func() {
+		agent.Run(inputChan, outputChan)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Expected - agent exited
+	case <-time.After(100 * time.Millisecond):
+		t.Error("agent should have exited when input channel closed")
 	}
 }
 
-// TestAgent_MessagesAccumulation verifies that messages are accumulated
 func TestAgent_MessagesAccumulation(t *testing.T) {
-	agent := NewAgent(nil, nil, nil, nil, "test-session", "default", nil)
+	agent := NewAgent(nil, nil, nil, "test-session", "default", nil)
 
-	// Directly add messages to agent (simulating what ProcessInput does)
-	agent.messages = append(agent.messages, session.NewMessage(session.RoleUser, "first message", nil))
-	agent.messages = append(agent.messages, session.NewMessage(session.RoleAssistant, "response 1", nil))
-	agent.messages = append(agent.messages, session.NewMessage(session.RoleUser, "second message", nil))
+	// Directly add messages to agent (simulating what processInput does)
+	agent.messages = append(agent.messages, session.NewMessage(sharedutil.RoleUser, "first message", nil))
+	agent.messages = append(agent.messages, session.NewMessage(sharedutil.RoleAssistant, "response 1", nil))
+	agent.messages = append(agent.messages, session.NewMessage(sharedutil.RoleUser, "second message", nil))
 
 	if len(agent.messages) != 3 {
 		t.Errorf("expected 3 messages, got %d", len(agent.messages))
 	}
 
 	// Verify message order
-	if agent.messages[0].Content != "first message" {
-		t.Errorf("expected 'first message', got '%s'", agent.messages[0].Content)
+	if agent.messages[0].Message.Content != "first message" {
+		t.Errorf("expected 'first message', got '%s'", agent.messages[0].Message.Content)
 	}
-	if agent.messages[1].Content != "response 1" {
-		t.Errorf("expected 'response 1', got '%s'", agent.messages[1].Content)
+	if agent.messages[1].Message.Content != "response 1" {
+		t.Errorf("expected 'response 1', got '%s'", agent.messages[1].Message.Content)
 	}
-	if agent.messages[2].Content != "second message" {
-		t.Errorf("expected 'second message', got '%s'", agent.messages[2].Content)
+	if agent.messages[2].Message.Content != "second message" {
+		t.Errorf("expected 'second message', got '%s'", agent.messages[2].Message.Content)
 	}
 }
 
 func TestAgent_GetMessages(t *testing.T) {
-	agent := NewAgent(nil, nil, nil, nil, "test-session", "default", nil)
+	agent := NewAgent(nil, nil, nil, "test-session", "default", nil)
 	agent.messages = []*session.Message{
-		session.NewMessage(session.RoleUser, "hello", nil),
-		session.NewMessage(session.RoleAssistant, "hi there", nil),
+		session.NewMessage(sharedutil.RoleUser, "hello", nil),
+		session.NewMessage(sharedutil.RoleAssistant, "hi there", nil),
 	}
 
 	messages := agent.GetMessages()
@@ -130,14 +150,14 @@ func TestAgent_GetMessages(t *testing.T) {
 }
 
 func TestAgent_GetClusterName(t *testing.T) {
-	agent := NewAgent(nil, nil, nil, nil, "test-session", "my-cluster", nil)
+	agent := NewAgent(nil, nil, nil, "test-session", "my-cluster", nil)
 	if agent.GetClusterName() != "my-cluster" {
 		t.Errorf("expected 'my-cluster', got '%s'", agent.GetClusterName())
 	}
 }
 
 func TestAgent_SetClusterName(t *testing.T) {
-	agent := NewAgent(nil, nil, nil, nil, "test-session", "original", nil)
+	agent := NewAgent(nil, nil, nil, "test-session", "original", nil)
 	agent.SetClusterName("new-cluster")
 
 	if agent.clusterName != "new-cluster" {
@@ -147,8 +167,8 @@ func TestAgent_SetClusterName(t *testing.T) {
 
 func TestNewState(t *testing.T) {
 	messages := []*session.Message{
-		session.NewMessage(session.RoleUser, "hello", nil),
-		session.NewMessage(session.RoleAssistant, "hi", nil),
+		session.NewMessage(sharedutil.RoleUser, "hello", nil),
+		session.NewMessage(sharedutil.RoleAssistant, "hi", nil),
 	}
 	state := NewState("prod", messages)
 
@@ -184,52 +204,9 @@ func TestBuildSystemPrompt_ChineseContent(t *testing.T) {
 	}
 }
 
-// mockStore implements session.StoreInterface for testing
-type mockStore struct {
-	conversations map[string]*session.Conversation
-}
-
-func (m *mockStore) GetConversation(id string) (*session.Conversation, error) {
-	if conv, ok := m.conversations[id]; ok {
-		return conv, nil
-	}
-	return nil, nil
-}
-
-func (m *mockStore) CreateConversation(id, clusterName, initialMessage string) (*session.Conversation, error) {
-	conv := &session.Conversation{
-		ID:           id,
-		ClusterName:  clusterName,
-		Messages:     []*session.Message{},
-	}
-	m.conversations[id] = conv
-	return conv, nil
-}
-
-func (m *mockStore) UpdateConversation(id string, update func(*session.Conversation) error) (*session.Conversation, error) {
-	conv, ok := m.conversations[id]
-	if !ok {
-		conv, _ = m.CreateConversation(id, "", "")
-	}
-	return conv, update(conv)
-}
-
-func (m *mockStore) ListConversations() []*session.Conversation {
-	result := make([]*session.Conversation, 0, len(m.conversations))
-	for _, conv := range m.conversations {
-		result = append(result, conv)
-	}
-	return result
-}
-
-func (m *mockStore) DeleteConversation(id string) error {
-	delete(m.conversations, id)
-	return nil
-}
-
 func TestAgent_SetClusterName_WithStore(t *testing.T) {
 	store := &mockStore{conversations: make(map[string]*session.Conversation)}
-	agent := NewAgent(nil, nil, nil, store, "test-session", "original", nil)
+	agent := NewAgent(nil, nil, store, "test-session", "original", nil)
 
 	agent.SetClusterName("new-cluster")
 
@@ -246,131 +223,296 @@ func TestAgent_SetClusterName_WithStore(t *testing.T) {
 
 func TestAgent_AddMessageToSession(t *testing.T) {
 	store := &mockStore{conversations: make(map[string]*session.Conversation)}
-	agent := NewAgent(nil, nil, nil, store, "test-session", "default", nil)
+	agent := NewAgent(nil, nil, store, "test-session", "default", nil)
 
-	agent.addMessageToSession(session.RoleUser, "test message", nil)
+	testMsg := session.NewMessage(sharedutil.RoleUser, "test message", nil)
+	agent.addMessageToSession(testMsg)
 
 	conv, _ := store.GetConversation("test-session")
 	if len(conv.Messages) != 1 {
 		t.Errorf("expected 1 message in store, got %d", len(conv.Messages))
 	}
-	if conv.Messages[0].Content != "test message" {
-		t.Errorf("expected 'test message', got '%s'", conv.Messages[0].Content)
+	if conv.Messages[0].Message.Content != "test message" {
+		t.Errorf("expected 'test message', got '%s'", conv.Messages[0].Message.Content)
 	}
 }
 
 func TestAgent_AddMessageToSession_NoStore(t *testing.T) {
-	agent := NewAgent(nil, nil, nil, nil, "test-session", "default", nil)
+	agent := NewAgent(nil, nil, nil, "test-session", "default", nil)
 
 	// Should not panic when store is nil
-	agent.addMessageToSession(session.RoleUser, "test", nil)
+	testMsg := session.NewMessage(sharedutil.RoleUser, "test", nil)
+	agent.addMessageToSession(testMsg)
 }
 
-func TestUI_Progress_Fields(t *testing.T) {
-	progress := ui.Progress{
-		Type:        "tool_result",
+func TestOutputType_Constants(t *testing.T) {
+	if ui.OutputTypeText != "text" {
+		t.Errorf("expected OutputTypeText 'text', got '%s'", ui.OutputTypeText)
+	}
+	if ui.OutputTypeToolStart != "tool_call_start" {
+		t.Errorf("expected OutputTypeToolStart 'tool_call_start', got '%s'", ui.OutputTypeToolStart)
+	}
+	if ui.OutputTypeToolResult != "tool_result" {
+		t.Errorf("expected OutputTypeToolResult 'tool_result', got '%s'", ui.OutputTypeToolResult)
+	}
+	if ui.OutputTypeDone != "done" {
+		t.Errorf("expected OutputTypeDone 'done', got '%s'", ui.OutputTypeDone)
+	}
+	if ui.OutputTypeError != "error" {
+		t.Errorf("expected OutputTypeError 'error', got '%s'", ui.OutputTypeError)
+	}
+}
+
+func TestInput_Fields(t *testing.T) {
+	input := ui.Input{
+		Text:        "hello",
+		ClusterName: "test-cluster",
+	}
+
+	if input.Text != "hello" {
+		t.Errorf("expected Text 'hello', got '%s'", input.Text)
+	}
+	if input.ClusterName != "test-cluster" {
+		t.Errorf("expected ClusterName 'test-cluster', got '%s'", input.ClusterName)
+	}
+}
+
+func TestOutput_Fields(t *testing.T) {
+	output := ui.Output{
+		Type:        ui.OutputTypeToolResult,
 		Content:     "result content",
 		ToolName:    "get_pods",
 		ToolArgs:    `{"ns":"default"}`,
 		ToolResult:  "pods list",
 		ToolSuccess: true,
+		ClusterName: "prod",
 	}
 
-	if progress.Type != "tool_result" {
-		t.Errorf("expected Type 'tool_result', got '%s'", progress.Type)
+	if output.Type != ui.OutputTypeToolResult {
+		t.Errorf("expected Type 'tool_result', got '%s'", output.Type)
 	}
-	if progress.ToolName != "get_pods" {
-		t.Errorf("expected ToolName 'get_pods', got '%s'", progress.ToolName)
+	if output.ToolName != "get_pods" {
+		t.Errorf("expected ToolName 'get_pods', got '%s'", output.ToolName)
 	}
-	if !progress.ToolSuccess {
+	if !output.ToolSuccess {
 		t.Error("expected ToolSuccess true")
 	}
-}
-
-func TestUI_Message_Fields(t *testing.T) {
-	msg := ui.Message{
-		Role:      session.RoleAssistant,
-		Content:   "hello",
-		ToolCalls: []session.ToolCall{},
-	}
-
-	if msg.Role != session.RoleAssistant {
-		t.Errorf("expected RoleAssistant, got %s", msg.Role)
-	}
-	if msg.Content != "hello" {
-		t.Errorf("expected 'hello', got '%s'", msg.Content)
+	if output.ClusterName != "prod" {
+		t.Errorf("expected ClusterName 'prod', got '%s'", output.ClusterName)
 	}
 }
 
-func TestMockUI_SendMessage(t *testing.T) {
-	mock := &mockUI{}
-	msg := session.NewMessage(session.RoleAssistant, "test response", nil)
-
-	mock.SendMessage(msg)
-
-	if len(mock.messages) != 1 {
-		t.Errorf("expected 1 message, got %d", len(mock.messages))
-	}
-	if mock.messages[0].Content != "test response" {
-		t.Errorf("expected 'test response', got '%s'", mock.messages[0].Content)
-	}
-}
-
-func TestMockUI_SendProgress(t *testing.T) {
-	mock := &mockUI{}
-	progress := ui.Progress{
-		Type:      "text",
-		Content:   "streaming text",
-		ToolName:  "test_tool",
-		ToolSuccess: true,
+func TestReconstructLLMMessages_UserMessage(t *testing.T) {
+	messages := []*session.Message{
+		{
+			Message: sharedutil.Message{
+				Role:    sharedutil.RoleUser,
+				Content: "get pods",
+			},
+			MessageType: session.MessageTypeUser,
+			Timestamp:   time.Now(),
+		},
 	}
 
-	mock.SendProgress(progress)
+	llmMessages := ReconstructLLMMessages(messages, "test-cluster")
 
-	if len(mock.progresses) != 1 {
-		t.Errorf("expected 1 progress, got %d", len(mock.progresses))
+	// Should have system prompt + user message
+	if len(llmMessages) != 2 {
+		t.Errorf("expected 2 messages, got %d", len(llmMessages))
 	}
-	if mock.progresses[0].Content != "streaming text" {
-		t.Errorf("expected 'streaming text', got '%s'", mock.progresses[0].Content)
+	if llmMessages[0].Role != "system" {
+		t.Errorf("expected first message role 'system', got '%s'", llmMessages[0].Role)
+	}
+	if llmMessages[1].Role != "user" {
+		t.Errorf("expected second message role 'user', got '%s'", llmMessages[1].Role)
+	}
+	if llmMessages[1].Content != "get pods" {
+		t.Errorf("expected content 'get pods', got '%s'", llmMessages[1].Content)
 	}
 }
 
-func TestMockUI_Done(t *testing.T) {
-	mock := &mockUI{}
-	mock.Done()
+func TestReconstructLLMMessages_ToolCallMessage(t *testing.T) {
+	messages := []*session.Message{
+		{
+			Message: sharedutil.Message{
+				Role:    sharedutil.RoleUser,
+				Content: "delete pod nginx",
+			},
+			MessageType: session.MessageTypeUser,
+			Timestamp:   time.Now(),
+		},
+		{
+			Message: sharedutil.Message{
+				Role:       sharedutil.RoleAssistant,
+				Content:    "执行工具: k8s_delete(...)",
+				ToolCallID: "call_123",
+				ToolCalls: []sharedutil.ToolCall{
+					{ID: "call_123", Name: "k8s_delete", Arguments: `{"name":"nginx"}`},
+				},
+			},
+			MessageType: session.MessageTypeToolCall,
+			Timestamp:   time.Now(),
+		},
+	}
 
-	if !mock.doneCalled {
-		t.Error("expected doneCalled to be true")
+	llmMessages := ReconstructLLMMessages(messages, "test-cluster")
+
+	// Should have system + user + assistant tool call
+	if len(llmMessages) != 3 {
+		t.Errorf("expected 3 messages, got %d", len(llmMessages))
+	}
+	// Third message should be assistant with tool calls
+	if llmMessages[2].Role != "assistant" {
+		t.Errorf("expected third message role 'assistant', got '%s'", llmMessages[2].Role)
+	}
+	if len(llmMessages[2].ToolCalls) != 1 {
+		t.Errorf("expected 1 tool call, got %d", len(llmMessages[2].ToolCalls))
+	}
+	if llmMessages[2].ToolCalls[0].Name != "k8s_delete" {
+		t.Errorf("expected tool call name 'k8s_delete', got '%s'", llmMessages[2].ToolCalls[0].Name)
 	}
 }
 
-func TestMockUI_Error(t *testing.T) {
-	mock := &mockUI{}
-	err := errors.New("test error")
-
-	mock.Error(err)
-
-	if !mock.errorCalled {
-		t.Error("expected errorCalled to be true")
+func TestReconstructLLMMessages_ThinkAndTextMessages(t *testing.T) {
+	messages := []*session.Message{
+		{
+			Message: sharedutil.Message{
+				Role:    sharedutil.RoleUser,
+				Content: "describe pod nginx",
+			},
+			MessageType: session.MessageTypeUser,
+			Timestamp:   time.Now(),
+		},
+		{
+			Message: sharedutil.Message{
+				Role:    sharedutil.RoleAssistant,
+				Content: "分析中...",
+			},
+			MessageType: session.MessageTypeThink,
+			Timestamp:   time.Now(),
+		},
+		{
+			Message: sharedutil.Message{
+				Role:    sharedutil.RoleAssistant,
+				Content: "好的，我来描述 pod nginx 的信息",
+			},
+			MessageType: session.MessageTypeText,
+			Timestamp:   time.Now(),
+		},
 	}
-	if mock.lastError.Error() != "test error" {
-		t.Errorf("expected 'test error', got '%s'", mock.lastError.Error())
+
+	llmMessages := ReconstructLLMMessages(messages, "test-cluster")
+
+	// Should have system + user + 2 assistant messages
+	if len(llmMessages) != 4 {
+		t.Errorf("expected 4 messages, got %d", len(llmMessages))
 	}
 }
 
-func TestMockUI_ClusterName(t *testing.T) {
-	mock := &mockUI{clusterName: "prod"}
+func TestReconstructLLMMessages_EmptySession(t *testing.T) {
+	messages := []*session.Message{}
 
-	if mock.ClusterName() != "prod" {
-		t.Errorf("expected 'prod', got '%s'", mock.ClusterName())
+	llmMessages := ReconstructLLMMessages(messages, "prod-cluster")
+
+	// Should only have system prompt
+	if len(llmMessages) != 1 {
+		t.Errorf("expected 1 message (system only), got %d", len(llmMessages))
+	}
+	if llmMessages[0].Role != "system" {
+		t.Errorf("expected first message role 'system', got '%s'", llmMessages[0].Role)
 	}
 }
 
-func TestMockUI_SetClusterName(t *testing.T) {
-	mock := &mockUI{}
-	mock.SetClusterName("dev")
+func TestNewAgent_RestoresSessionAndLLMContext(t *testing.T) {
+	store := &mockStore{
+		conversations: make(map[string]*session.Conversation),
+	}
 
-	if mock.clusterName != "dev" {
-		t.Errorf("expected 'dev', got '%s'", mock.clusterName)
+	// Create a session with existing messages
+	existingMessages := []*session.Message{
+		{
+			Message: sharedutil.Message{
+				Role:    sharedutil.RoleUser,
+				Content: "get pods",
+			},
+			MessageType: session.MessageTypeUser,
+			Timestamp:   time.Now(),
+		},
+		{
+			Message: sharedutil.Message{
+				Role:    sharedutil.RoleAssistant,
+				Content: "OK, 获取 pods 信息",
+			},
+			MessageType: session.MessageTypeText,
+			Timestamp:   time.Now(),
+		},
+	}
+	conv, _ := store.CreateConversation("session-123", "test-cluster", "")
+	conv.Messages = existingMessages
+
+	// Create new agent with the store
+	agent := NewAgent(nil, nil, store, "session-123", "test-cluster", nil)
+
+	// Verify messages were restored
+	if len(agent.messages) != 2 {
+		t.Errorf("expected 2 messages restored, got %d", len(agent.messages))
+	}
+
+	// Verify llmMessages were reconstructed (system + user + assistant)
+	if len(agent.llmMessages) != 3 {
+		t.Errorf("expected 3 llmMessages (system + user + assistant), got %d", len(agent.llmMessages))
+	}
+}
+
+func TestMessageType_Inference(t *testing.T) {
+	// Test that session.NewMessage does NOT set MessageType by default
+	// (MessageType is set by the calling code in processWithOutput)
+	msg := session.NewMessage(sharedutil.RoleUser, "test", nil)
+
+	// NewMessage should not set MessageType (it defaults to empty)
+	if msg.MessageType != "" {
+		t.Errorf("expected empty MessageType from NewMessage, got '%s'", msg.MessageType)
+	}
+	if msg.Message.Role != sharedutil.RoleUser {
+		t.Errorf("expected RoleUser, got '%s'", msg.Message.Role)
+	}
+	if msg.Message.Content != "test" {
+		t.Errorf("expected content 'test', got '%s'", msg.Message.Content)
+	}
+}
+
+func TestMessageType_Constants(t *testing.T) {
+	if session.MessageTypeUser != "user" {
+		t.Errorf("expected MessageTypeUser 'user', got '%s'", session.MessageTypeUser)
+	}
+	if session.MessageTypeText != "text" {
+		t.Errorf("expected MessageTypeText 'text', got '%s'", session.MessageTypeText)
+	}
+	if session.MessageTypeThink != "think" {
+		t.Errorf("expected MessageTypeThink 'think', got '%s'", session.MessageTypeThink)
+	}
+	if session.MessageTypeToolCall != "tool_call" {
+		t.Errorf("expected MessageTypeToolCall 'tool_call', got '%s'", session.MessageTypeToolCall)
+	}
+	if session.MessageTypeToolResult != "tool_result" {
+		t.Errorf("expected MessageTypeToolResult 'tool_result', got '%s'", session.MessageTypeToolResult)
+	}
+}
+
+func TestToolCall_IDField(t *testing.T) {
+	tc := sharedutil.ToolCall{
+		ID:        "call_abc123",
+		Name:      "k8s_get",
+		Arguments: `{"resource":"pods"}`,
+	}
+
+	if tc.ID != "call_abc123" {
+		t.Errorf("expected ID 'call_abc123', got '%s'", tc.ID)
+	}
+	if tc.Name != "k8s_get" {
+		t.Errorf("expected Name 'k8s_get', got '%s'", tc.Name)
+	}
+	if tc.Arguments != `{"resource":"pods"}` {
+		t.Errorf("expected Arguments '{}', got '%s'", tc.Arguments)
 	}
 }

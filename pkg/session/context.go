@@ -3,7 +3,7 @@ package session
 import (
 	"fmt"
 	"k8s-agent/pkg/cluster"
-	"k8s-agent/pkg/llm"
+	sharedutil "k8s-agent/pkg/shared"
 	"strings"
 )
 
@@ -22,14 +22,11 @@ func NewContextManager(config cluster.ContextConfig) *ContextManager {
 	return &ContextManager{config: config}
 }
 
-// isToolCallMessage checks if a message is a tool call related message
+// isToolCallMessage checks if a message is a tool call (not a result)
 func isToolCallMessage(msg *Message) bool {
-	// Tool messages contain "[Function Call:" or "[Tool:"
 	content := msg.Content
 	return strings.Contains(content, "[Function Call:") ||
-		strings.Contains(content, "[Tool:") ||
-		isToolResultMessage(msg) ||
-		strings.Contains(msg.Content, "[Tool:") ||
+		strings.Contains(content, "[Tool Call:") ||
 		strings.Contains(msg.Content, "ToolCallID")
 }
 
@@ -73,8 +70,8 @@ func (cm *ContextManager) BuildContextMessages(
 	systemPrompt string,
 	messages []*Message,
 	summaryPrompt string,
-) []llm.Message {
-	result := []llm.Message{
+) []sharedutil.Message {
+	result := []sharedutil.Message{
 		{Role: "system", Content: systemPrompt},
 	}
 
@@ -84,7 +81,7 @@ func (cm *ContextManager) BuildContextMessages(
 		systemTokens := estimateTokens(systemPrompt)
 		if systemTokens+estimatedTokens <= cm.config.MaxTokens {
 			for _, m := range messages {
-				result = append(result, llm.Message{
+				result = append(result, sharedutil.Message{
 					Role:    string(m.Role),
 					Content: m.Content,
 				})
@@ -93,25 +90,33 @@ func (cm *ContextManager) BuildContextMessages(
 		}
 	}
 
-	// Level 1: Light compression - drop old tool call results, keep recent 10
+	// Level 1: Interaction-based compression
+	// Parse messages to interactions and compress old ones
+	interactions := ParseToInteractions(messages)
+	retentionLimit := cm.config.ToolCallRetention
+	if retentionLimit <= 0 {
+		retentionLimit = DefaultToolCallRetention
+	}
 	droppedLevel1 := 0
-	compressed, dropped := cm.level1Compress(messages)
-	droppedLevel1 = dropped
+	var compressed []*Message
+	if ShouldCompress(interactions, retentionLimit) {
+		compressed, droppedLevel1 = CompressInteractions(interactions, retentionLimit)
+	}
 
 	// Check if Level 1 is sufficient
 	if len(compressed) <= cm.config.MaxMessages {
 		estimatedTokens := estimateMessagesTokens(compressed)
 		systemTokens := estimateTokens(systemPrompt)
 		if systemTokens+estimatedTokens <= cm.config.MaxTokens {
-			// Add placeholder if any messages were dropped
+			// Add placeholder if any interactions were compressed
 			if droppedLevel1 > 0 {
-				result = append(result, llm.Message{
+				result = append(result, sharedutil.Message{
 					Role:    "system",
-					Content: fmt.Sprintf("[%d earlier messages including %d tool calls have been condensed]", droppedLevel1, droppedLevel1/2),
+					Content: fmt.Sprintf("[%d msgs + %d tool calls condensed]", droppedLevel1*3, droppedLevel1),
 				})
 			}
 			for _, m := range compressed {
-				result = append(result, llm.Message{
+				result = append(result, sharedutil.Message{
 					Role:    string(m.Role),
 					Content: m.Content,
 				})
@@ -122,7 +127,7 @@ func (cm *ContextManager) BuildContextMessages(
 
 	// Level 2: Medium compression - keep only recent max-messages or max-tokens
 	droppedLevel2 := 0
-	compressed, dropped = cm.level2Compress(compressed)
+	compressed, dropped := cm.level2Compress(compressed)
 	droppedLevel2 = dropped + droppedLevel1
 
 	// Check if Level 2 is sufficient
@@ -132,13 +137,13 @@ func (cm *ContextManager) BuildContextMessages(
 		if systemTokens+estimatedTokens <= cm.config.MaxTokens {
 			// Add placeholder if any messages were dropped
 			if droppedLevel2 > 0 {
-				result = append(result, llm.Message{
+				result = append(result, sharedutil.Message{
 					Role:    "system",
 					Content: fmt.Sprintf("[%d earlier messages have been condensed due to context window limits]", droppedLevel2),
 				})
 			}
 			for _, m := range compressed {
-				result = append(result, llm.Message{
+				result = append(result, sharedutil.Message{
 					Role:    string(m.Role),
 					Content: m.Content,
 				})
@@ -150,7 +155,7 @@ func (cm *ContextManager) BuildContextMessages(
 	// Level 3: Deep compression - generate summary if enabled
 	if cm.config.SummaryEnabled {
 		summary := cm.generateSummary(messages, summaryPrompt)
-		result = []llm.Message{
+		result = []sharedutil.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "system", Content: "[Previous conversation summary]: " + summary},
 		}
@@ -167,14 +172,14 @@ func (cm *ContextManager) BuildContextMessages(
 
 		droppedLevel3 := startIdx
 		if droppedLevel3 > 0 {
-			result = append(result, llm.Message{
+			result = append(result, sharedutil.Message{
 				Role:    "system",
 				Content: fmt.Sprintf("[%d earlier messages have been summarized into the summary above]", droppedLevel3),
 			})
 		}
 
 		for i := startIdx; i < len(messages); i++ {
-			result = append(result, llm.Message{
+			result = append(result, sharedutil.Message{
 				Role:    string(messages[i].Role),
 				Content: messages[i].Content,
 			})
@@ -185,13 +190,13 @@ func (cm *ContextManager) BuildContextMessages(
 	} else {
 		// No summarization, just do final token trim
 		if droppedLevel2 > 0 {
-			result = append(result, llm.Message{
+			result = append(result, sharedutil.Message{
 				Role:    "system",
 				Content: fmt.Sprintf("[%d earlier messages have been condensed due to context window limits]", droppedLevel2),
 			})
 		}
 		for _, m := range compressed {
-			result = append(result, llm.Message{
+			result = append(result, sharedutil.Message{
 				Role:    string(m.Role),
 				Content: m.Content,
 			})
@@ -202,74 +207,145 @@ func (cm *ContextManager) BuildContextMessages(
 	return result
 }
 
-// level1Compress drops old tool call results but keeps recent 10 tool calls
-// Returns compressed messages and count of dropped messages
+// level1Compress drops old tool call results but keeps recent N complete interactions.
+// A complete interaction is: user query + tool call + tool result + final summary (assistant message that is not a tool call).
+// For old interactions being dropped, we keep the user query and final summary, discard tool call and tool result.
+// Returns compressed messages and count of dropped messages.
 func (cm *ContextManager) level1Compress(messages []*Message) ([]*Message, int) {
-	if len(messages) <= cm.config.MaxMessages {
+	if len(messages) == 0 {
 		return messages, 0
 	}
 
-	// Identify all tool call related messages
-	type toolCallInfo struct {
-		index int
-		msg   *Message
-	}
-	var toolCalls []toolCallInfo
-
-	for i, msg := range messages {
-		if isToolCallMessage(msg) || isToolResultMessage(msg) {
-			toolCalls = append(toolCalls, toolCallInfo{index: i, msg: msg})
-		}
-	}
-
-	// If no tool calls, return original
-	if len(toolCalls) == 0 {
+	// Find all complete interactions (from back to front)
+	// A complete interaction ends with an assistant message that is NOT a tool call
+	interactions := cm.findCompleteInteractions(messages)
+	if len(interactions) == 0 {
 		return messages, 0
 	}
 
-	// Keep only the last N tool calls and their results
+	// Keep only the last N complete interactions
 	keepCount := cm.config.ToolCallRetention
 	if keepCount <= 0 {
 		keepCount = DefaultToolCallRetention
 	}
 
-	// Find the last N tool call indices
-	keepStartIdx := 0
-	if len(toolCalls) > keepCount {
-		keepStartIdx = len(toolCalls) - keepCount
-	}
-	keepIndices := make(map[int]bool)
-	for i := keepStartIdx; i < len(toolCalls); i++ {
-		keepIndices[toolCalls[i].index] = true
+	// If number of interactions is within retention limit, no need to compress
+	if len(interactions) <= keepCount {
+		return messages, 0
 	}
 
-	// Also keep tool result that follows a kept tool call
+	// Build result by processing interactions
 	var result []*Message
 	droppedCount := 0
-	for i, msg := range messages {
-		// Keep all non-tool messages
-		if !isToolCallMessage(msg) && !isToolResultMessage(msg) {
-			result = append(result, msg)
-			continue
-		}
 
-		// Keep tool messages that are in the keep list
-		if keepIndices[i] {
-			result = append(result, msg)
-			continue
-		}
+	// Process from oldest to newest
+	for i := 0; i < len(interactions); i++ {
+		interaction := interactions[i]
+		isRecent := i >= len(interactions)-keepCount
 
-		// For tool results, check if the previous message is kept
-		if isToolResultMessage(msg) && i > 0 && keepIndices[i-1] {
-			result = append(result, msg)
-			continue
+		if isRecent {
+			// Keep entire interaction intact
+			for _, idx := range interaction.Indices {
+				result = append(result, messages[idx])
+			}
+		} else {
+			// For old interactions, keep only user query and final summary
+			// Discard tool call and tool result
+			for _, idx := range interaction.Indices {
+				msg := messages[idx]
+				if isUserMessage(msg) || isFinalSummaryMessage(msg, &interaction, idx) {
+					result = append(result, msg)
+				} else {
+					droppedCount++
+				}
+			}
 		}
-
-		// Otherwise skip (compress) and count
-		droppedCount++
 	}
 
+	// If result is still too long, let level2 handle it
 	return result, droppedCount
+}
+
+// interaction represents a complete user-LLM interaction
+type interaction struct {
+	Indices     []int // indices into the messages array
+	UserIndex   int  // index of user query
+	SummaryIndex int // index of final summary (assistant message that is not a tool call)
+}
+
+// isUserMessage checks if a message is from user
+func isUserMessage(msg *Message) bool {
+	return msg.Role == RoleUser
+}
+
+// isFinalSummaryMessage checks if this message is the final summary of an interaction
+// by checking both that the message is assistant role AND the index matches SummaryIndex
+func isFinalSummaryMessage(msg *Message, interaction *interaction, idx int) bool {
+	return msg.Role == RoleAssistant && interaction.SummaryIndex >= 0 && idx == interaction.SummaryIndex
+}
+
+// findCompleteInteractions identifies all complete interactions in the message list
+// A complete interaction is: user query + tool call(s) + tool result(s) + final summary
+// Returns interactions from oldest to newest
+func (cm *ContextManager) findCompleteInteractions(messages []*Message) []interaction {
+	var interactions []interaction
+	var currentInteraction *interaction
+
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
+
+		if msg.Role == RoleUser {
+			// Start new interaction
+			if currentInteraction != nil && currentInteraction.UserIndex >= 0 {
+				interactions = append(interactions, *currentInteraction)
+			}
+			currentInteraction = &interaction{
+				UserIndex:   i,
+				SummaryIndex: -1,
+			}
+			currentInteraction.Indices = append(currentInteraction.Indices, i)
+		} else if msg.Role == RoleAssistant {
+			if isToolCallMessage(msg) {
+				// Tool call - add to current interaction
+				if currentInteraction == nil {
+					// Edge case: tool call without user message before it, start new interaction
+					currentInteraction = &interaction{
+						UserIndex:   -1,
+						SummaryIndex: -1,
+					}
+				}
+				currentInteraction.Indices = append(currentInteraction.Indices, i)
+			} else {
+				// Final summary (assistant but not tool call)
+				if currentInteraction == nil {
+					// Edge case: summary without prior interaction, treat as its own interaction
+					currentInteraction = &interaction{
+						UserIndex:    -1,
+						SummaryIndex: i,
+					}
+				} else {
+					currentInteraction.SummaryIndex = i
+				}
+				currentInteraction.Indices = append(currentInteraction.Indices, i)
+			}
+		} else if isToolResultMessage(msg) {
+			// Tool result - add to current interaction
+			if currentInteraction == nil {
+				currentInteraction = &interaction{
+					UserIndex:   -1,
+					SummaryIndex: -1,
+				}
+			}
+			currentInteraction.Indices = append(currentInteraction.Indices, i)
+		}
+	}
+
+	// Don't forget the last interaction
+	if currentInteraction != nil && currentInteraction.UserIndex >= 0 {
+		interactions = append(interactions, *currentInteraction)
+	}
+
+	return interactions
 }
 
 // level2Compress keeps only the most recent max-messages or fits within max-tokens
@@ -342,7 +418,7 @@ func (cm *ContextManager) trimMessagesByTokenLimit(messages []*Message) ([]*Mess
 }
 
 // trimByTokenLimitWithPlaceholder trims messages to fit within token limit and adds a placeholder
-func (cm *ContextManager) trimByTokenLimitWithPlaceholder(messages []llm.Message) []llm.Message {
+func (cm *ContextManager) trimByTokenLimitWithPlaceholder(messages []sharedutil.Message) []sharedutil.Message {
 	if cm.config.MaxTokens <= 0 || len(messages) == 0 {
 		return messages
 	}
@@ -358,14 +434,14 @@ func (cm *ContextManager) trimByTokenLimitWithPlaceholder(messages []llm.Message
 		return messages[:1]
 	}
 
-	var trimmed []llm.Message
+	var trimmed []sharedutil.Message
 	trimmed = append(trimmed, messages[0])
 	droppedCount := 0
 
 	for i := len(messages) - 1; i >= 1 && remaining > 0; i-- {
 		msgTokens := estimateTokens(messages[i].Content) + 4
 		if msgTokens <= remaining {
-			trimmed = append([]llm.Message{messages[i]}, trimmed...)
+			trimmed = append([]sharedutil.Message{messages[i]}, trimmed...)
 			remaining -= msgTokens
 		} else {
 			droppedCount++
@@ -374,13 +450,13 @@ func (cm *ContextManager) trimByTokenLimitWithPlaceholder(messages []llm.Message
 
 	// Add placeholder if any messages were dropped
 	if droppedCount > 0 {
-		placeholder := llm.Message{
+		placeholder := sharedutil.Message{
 			Role:    "system",
 			Content: fmt.Sprintf("[%d earlier messages have been removed due to context window limits]", droppedCount),
 		}
 		// Insert after system prompt(s)
 		if len(trimmed) > 1 {
-			trimmed = append([]llm.Message{trimmed[0], placeholder}, trimmed[1:]...)
+			trimmed = append([]sharedutil.Message{trimmed[0], placeholder}, trimmed[1:]...)
 		} else {
 			trimmed = append(trimmed, placeholder)
 		}
@@ -505,4 +581,160 @@ func (cm *ContextManager) MessageCount() int {
 // IsSummaryEnabled returns whether summarization is enabled
 func (cm *ContextManager) IsSummaryEnabled() bool {
 	return cm.config.SummaryEnabled
+}
+
+// CompressMessages compresses LLM messages to fit within context limits
+func (cm *ContextManager) CompressMessages(messages []sharedutil.Message) []sharedutil.Message {
+	if len(messages) <= cm.config.MaxMessages {
+		return messages
+	}
+
+	// Level 1: Light compression
+	compressed, _ := cm.level1CompressLLM(messages)
+	if len(compressed) <= cm.config.MaxMessages {
+		return compressed
+	}
+
+	// Level 2: Medium compression - keep only recent messages
+	windowSize := cm.config.MaxMessages
+	if windowSize <= 0 {
+		windowSize = 20
+	}
+	if len(compressed) > windowSize {
+		compressed = compressed[len(compressed)-windowSize:]
+	}
+
+	return compressed
+}
+
+// llmInteraction represents a complete user-LLM interaction in LLM message format
+type llmInteraction struct {
+	Indices      []int // indices into the messages array
+	UserIndex    int  // index of user query (-1 if none)
+	SummaryIndex int  // index of final summary (-1 if none)
+}
+
+// isLLMToolResultMessage checks if a message is a tool result in LLM format
+func isLLMToolResultMessage(m sharedutil.Message) bool {
+	return m.Role == "tool"
+}
+
+// isLLMToolCallMessage checks if a message is a tool call in LLM format
+func isLLMToolCallMessage(m sharedutil.Message) bool {
+	return m.Role == "assistant" && len(m.ToolCalls) > 0
+}
+
+// isLLMFinalSummaryMessage checks if this is a final summary (assistant message without tool calls)
+func isLLMFinalSummaryMessage(m sharedutil.Message) bool {
+	return m.Role == "assistant" && len(m.ToolCalls) == 0
+}
+
+// findLLMCompleteInteractions identifies complete interactions in LLM message format
+// A complete interaction is: user + tool call + tool result + final summary
+// Returns interactions from oldest to newest
+func (cm *ContextManager) findLLMCompleteInteractions(messages []sharedutil.Message) []llmInteraction {
+	var interactions []llmInteraction
+	var current *llmInteraction
+
+	for i := range messages {
+		m := messages[i]
+
+		if m.Role == "user" {
+			// Start new interaction
+			if current != nil && current.UserIndex >= 0 {
+				interactions = append(interactions, *current)
+			}
+			current = &llmInteraction{
+				UserIndex:    i,
+				SummaryIndex: -1,
+			}
+			current.Indices = append(current.Indices, i)
+		} else if isLLMToolCallMessage(m) {
+			// Tool call - add to current interaction
+			if current == nil {
+				current = &llmInteraction{
+					UserIndex:    -1,
+					SummaryIndex: -1,
+				}
+			}
+			current.Indices = append(current.Indices, i)
+		} else if isLLMToolResultMessage(m) {
+			// Tool result - add to current interaction
+			if current == nil {
+				current = &llmInteraction{
+					UserIndex:    -1,
+					SummaryIndex: -1,
+				}
+			}
+			current.Indices = append(current.Indices, i)
+		} else if isLLMFinalSummaryMessage(m) {
+			// Final summary
+			if current == nil {
+				current = &llmInteraction{
+					UserIndex:    -1,
+					SummaryIndex: -1,
+				}
+			} else {
+				current.SummaryIndex = i
+			}
+			current.Indices = append(current.Indices, i)
+		}
+	}
+
+	if current != nil && current.UserIndex >= 0 {
+		interactions = append(interactions, *current)
+	}
+
+	return interactions
+}
+
+// level1CompressLLM compresses LLM message slice by keeping recent N complete interactions
+// For old interactions, keeps user query and final summary, discards tool call and tool result
+func (cm *ContextManager) level1CompressLLM(messages []sharedutil.Message) ([]sharedutil.Message, int) {
+	interactions := cm.findLLMCompleteInteractions(messages)
+	if len(interactions) == 0 {
+		return messages, 0
+	}
+
+	keepCount := cm.config.ToolCallRetention
+	if keepCount <= 0 {
+		keepCount = DefaultToolCallRetention
+	}
+
+	// If interactions within retention limit, no compression needed
+	if len(interactions) <= keepCount {
+		return messages, 0
+	}
+
+	var result []sharedutil.Message
+	droppedCount := 0
+
+	for i := range interactions {
+		interaction := interactions[i]
+		isRecent := i >= len(interactions)-keepCount
+
+		if isRecent {
+			// Keep entire interaction intact
+			for _, idx := range interaction.Indices {
+				result = append(result, messages[idx])
+			}
+		} else {
+			// For old interactions, keep only user query and final summary
+			for _, idx := range interaction.Indices {
+				m := messages[idx]
+				// Keep user messages
+				if m.Role == "user" {
+					result = append(result, m)
+				} else if interaction.SummaryIndex != -1 && idx == interaction.SummaryIndex {
+					// Keep final summary
+					result = append(result, m)
+				} else {
+					// Discard tool call and tool result
+					droppedCount++
+				}
+			}
+		}
+	}
+
+	return result, droppedCount
 }

@@ -1,251 +1,439 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
 	"time"
 
-	"k8s-agent/pkg/engine"
+	"gopkg.in/yaml.v3"
+	"k8s-agent/pkg/ipc"
 	"k8s-agent/pkg/llm"
 	"k8s-agent/pkg/log"
 	"k8s-agent/pkg/session"
-	"k8s-agent/pkg/ui"
+	sharedutil "k8s-agent/pkg/shared"
 )
 
-// Agent handles the conversation flow between LLM and UI
-// It receives user input, builds prompts, executes tool calls, and streams progress to UI
-type Agent struct {
-	llmSvc      *llm.Service
-	fnExec      *llm.Executor
-	confirmMgr  interface {
-		CreateConfirmation(clusterName string, op *engine.ClassifiedOperation) (string, error)
+// parseThinkTags parses text containing <think>xxx</think> tags
+// textPart represents a part of text with its type (text or think)
+type textPart struct {
+	isThink bool
+	content string
+}
+
+// parseThinkTags parses text and returns parts in original order
+func parseThinkTags(text string) []textPart {
+	parts := []textPart{}
+	thinkStart := "<think>"
+	thinkEnd := "</think>"
+
+	for {
+		startIdx := strings.Index(text, thinkStart)
+		if startIdx == -1 {
+			// No more think tags
+			if len(text) > 0 {
+				parts = append(parts, textPart{isThink: false, content: text})
+			}
+			break
+		}
+
+		// Add text before think tag
+		if startIdx > 0 {
+			parts = append(parts, textPart{isThink: false, content: text[:startIdx]})
+		}
+
+		// Find end of think tag
+		endIdx := strings.Index(text[startIdx:], thinkEnd)
+		if endIdx == -1 {
+			// Unclosed think tag, treat rest as text
+			parts = append(parts, textPart{isThink: false, content: text[startIdx:]})
+			break
+		}
+
+		endIdx += startIdx + len(thinkEnd)
+		thinkContent := text[startIdx+len(thinkStart) : endIdx-len(thinkEnd)]
+		parts = append(parts, textPart{isThink: true, content: strings.TrimSpace(thinkContent)})
+
+		// Move to after this think tag
+		text = text[endIdx:]
 	}
-	store      session.StoreInterface
-	ctxManager *session.ContextManager
-	sessionID  string
-	clusterName string
-	messages   []*session.Message
+
+	return parts
+}
+
+// clusterLister lists available clusters
+type clusterLister interface {
+	ListClusters() []string
+}
+
+// UI message prefixes for display formatting
+const (
+	uiThinkPrefix    = "💭 "
+	uiToolPrefix     = "🔧 "
+	uiSuccessPrefix  = "✅ "
+	uiErrorPrefix    = "❌ "
+)
+
+// parseThinkTags parses text and returns parts in original order
+
+// Agent handles the conversation flow between LLM and UI
+type Agent struct {
+	llmSvc        *llm.Service
+	fnExec        *llm.Executor
+	clusterLister  clusterLister
+	store          session.StoreInterface
+	ctxManager     *session.ContextManager
+	sessionID      string
+	clusterName    string
+	messages       []*session.Message       // UI display messages (with emojis, formatted content)
+	llmMessages    []sharedutil.Message            // LLM interaction messages (proper ToolCalls structure)
+	configContent  string                  // raw config file content for /config command
 }
 
 // NewAgent creates a new Agent instance
-func NewAgent(llmSvc *llm.Service, fnExec *llm.Executor, confirmMgr interface {
-	CreateConfirmation(clusterName string, op *engine.ClassifiedOperation) (string, error)
-}, store session.StoreInterface, sessionID, clusterName string, ctxManager *session.ContextManager) *Agent {
-	var sessionConv *session.Conversation
-	if store != nil {
-		var err error
-		sessionConv, err = store.GetConversation(sessionID)
-		if err != nil {
-			sessionConv, _ = store.CreateConversation(sessionID, clusterName, "")
-		}
-		if sessionConv == nil {
-			sessionConv, _ = store.CreateConversation(sessionID, clusterName, "")
-		}
-	}
-
-	return &Agent{
+func NewAgent(llmSvc *llm.Service, fnExec *llm.Executor, store session.StoreInterface, sessionID, clusterName string, ctxManager *session.ContextManager) *Agent {
+	agent := &Agent{
 		llmSvc:      llmSvc,
 		fnExec:      fnExec,
-		confirmMgr:  confirmMgr,
-		store:       store,
-		ctxManager:  ctxManager,
-		sessionID:   sessionID,
+		store:      store,
+		ctxManager: ctxManager,
+		sessionID:  sessionID,
 		clusterName: clusterName,
-		messages:    make([]*session.Message, 0),
+		messages:   make([]*session.Message, 0),
+		llmMessages: make([]sharedutil.Message, 0),
 	}
+
+	// Try to load existing session from store
+	if store != nil {
+		if conv, err := store.GetConversation(sessionID); err == nil && conv != nil {
+			// Session exists, restore messages
+			for _, msg := range conv.Messages {
+				agent.messages = append(agent.messages, msg)
+			}
+			// Reconstruct llmMessages from session
+			agent.llmMessages = ReconstructLLMMessages(conv.Messages, clusterName)
+		} else {
+			// Create new session
+			store.CreateConversation(sessionID, clusterName, "")
+		}
+	}
+
+	return agent
 }
 
-// ProcessInput processes user input and streams progress to UI
-func (a *Agent) ProcessInput(ctx context.Context, input string, uiInterface ui.UI) error {
-	if uiInterface == nil {
-		return fmt.Errorf("ui interface is required")
+// ReconstructLLMMessages reconstructs sharedutil.Messages from session messages
+func ReconstructLLMMessages(messages []*session.Message, clusterName string) []sharedutil.Message {
+	var llmMessages []sharedutil.Message
+
+	// Add system prompt
+	systemPrompt := BuildSystemPrompt(clusterName)
+	llmMessages = append(llmMessages, sharedutil.Message{Role: "system", Content: systemPrompt})
+
+	for _, msg := range messages {
+		switch msg.Role {
+		case session.RoleUser:
+			llmMessages = append(llmMessages, sharedutil.Message{
+				Role:    "user",
+				Content: msg.Content,
+			})
+		case session.RoleAssistant:
+			// Check if this is a tool call message
+			if len(msg.ToolCalls) > 0 {
+				toolCalls := make([]sharedutil.ToolCall, len(msg.ToolCalls))
+				for i, tc := range msg.ToolCalls {
+					toolCalls[i] = sharedutil.ToolCall{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments}
+				}
+				llmMessages = append(llmMessages, sharedutil.Message{
+					Role:    "assistant",
+					Content: "",
+					ToolCalls: toolCalls,
+				})
+			} else {
+				// Regular assistant message
+				// Skip UI-formatted content (with emoji prefix) by checking if it's a display format
+				content := msg.Content
+				// If content starts with emoji patterns, use the actual content portion
+				if strings.HasPrefix(content, "💭 ") || strings.HasPrefix(content, "🔧 ") ||
+					strings.HasPrefix(content, "✅ ") || strings.HasPrefix(content, "❌ ") {
+					// This is a UI-formatted message, extract the actual content
+					// For simplicity, just use the raw content since LLM doesn't need emoji
+					// The LLM will regenerate appropriate formatting
+				}
+				llmMessages = append(llmMessages, sharedutil.Message{
+					Role:    "assistant",
+					Content: content,
+				})
+			}
+		case session.RoleSystem:
+			llmMessages = append(llmMessages, sharedutil.Message{
+				Role:    "system",
+				Content: msg.Content,
+			})
+		}
+	}
+
+	return llmMessages
+}
+
+// SetClusterLister sets the cluster lister for Agent
+func (a *Agent) SetClusterLister(lister clusterLister) {
+	a.clusterLister = lister
+}
+
+// SetConfigContent sets the raw config file content for /config command
+func (a *Agent) SetConfigContent(content string) {
+	a.configContent = content
+}
+
+// Run starts the agent's processing loop
+// It reads from inputChan, processes messages, and sends results to outputChan
+func (a *Agent) Run(inputChan <-chan ipc.Input, outputChan chan<- ipc.Output) {
+	defer close(outputChan)
+	log.Info("Agent.Run started")
+
+	for input := range inputChan {
+		log.Info("Agent received input", "text", input.Text, "cluster", input.ClusterName)
+		a.processInput(input, outputChan)
+	}
+	log.Info("Agent.Run exiting (inputChan closed)")
+}
+
+// processInput handles a single input message
+func (a *Agent) processInput(input ipc.Input, outputChan chan<- ipc.Output) {
+	clusterName := input.ClusterName
+	if clusterName == "" {
+		clusterName = a.clusterName
+	}
+
+	// Update cluster context if changed
+	if input.ClusterName != "" && input.ClusterName != a.clusterName {
+		a.SetClusterName(input.ClusterName)
 	}
 
 	// Add user message to session
-	a.addMessageToSession(session.RoleUser, input, nil)
-	a.messages = append(a.messages, session.NewMessage(session.RoleUser, input, nil))
+	userMsg := session.NewMessage(session.RoleUser, input.Text, nil)
+	userMsg.MessageType = session.MessageTypeUser
+	a.messages = append(a.messages, userMsg)
+	a.addMessageToSession(userMsg)
+
+	// Handle /clusters command directly without LLM
+	if input.Text == "/clusters" {
+		a.handleClustersCommand(outputChan)
+		return
+	}
+
+	// Handle /config command directly without LLM
+	if strings.HasPrefix(input.Text, "/config") {
+		a.handleConfigCommand(input.Text, outputChan)
+		return
+	}
+
+	// Handle /cluster <name> command to switch cluster
+	if strings.HasPrefix(input.Text, "/cluster ") {
+		a.handleClusterCommand(input.Text, outputChan)
+		return
+	}
 
 	// Build state for processing
-	state := NewState(a.clusterName, a.messages)
+	state := NewState(clusterName, a.messages)
 
-	// Process with streaming progress
-	if err := a.processWithProgress(ctx, state, uiInterface); err != nil {
-		return fmt.Errorf("chat processing failed: %w", err)
-	}
-
-	return nil
+	// Process with streaming output
+	a.processWithOutput(state, outputChan)
 }
 
-// processWithProgress handles LLM function calling with progress callbacks to UI
-func (a *Agent) processWithProgress(ctx context.Context, state *State, uiInterface ui.UI) error {
+// formatSessionText formats text for session storage, matching UI display format
+func formatSessionText(role string, content string) string {
+	switch role {
+	case sharedutil.RoleUser:
+		return "You: " + content
+	case sharedutil.RoleAssistant:
+		return "Assistant: " + content
+	case sharedutil.RoleSystem:
+		return "System: " + content
+	default:
+		return content
+	}
+}
+
+// processWithOutput handles LLM function calling with output to channel
+func (a *Agent) processWithOutput(state *State, outputChan chan<- ipc.Output) {
 	systemPrompt := BuildSystemPrompt(state.ClusterName)
 
-	var messages []llm.Message
-	if a.ctxManager != nil {
-		messages = a.ctxManager.BuildContextMessages(systemPrompt, state.SessionMessages, "")
-	} else {
-		messages = []llm.Message{{Role: "system", Content: systemPrompt}}
-		for _, m := range state.SessionMessages {
-			messages = append(messages, llm.Message{
-				Role:    string(m.Role),
-				Content: m.Content,
-			})
-		}
+	// For new turn, initialize LLM message list with system prompt
+	// Messages from previous turns are already in a.llmMessages
+	if len(a.llmMessages) == 0 {
+		a.llmMessages = []sharedutil.Message{{Role: "system", Content: systemPrompt}}
 	}
 
-	log.Info("agent process started", "cluster", state.ClusterName, "messageCount", len(messages))
+	// Add user message from current turn
+	a.llmMessages = append(a.llmMessages, sharedutil.Message{
+		Role:    "user",
+		Content: state.SessionMessages[len(state.SessionMessages)-1].Content,
+	})
 
-	maxIterations := 10
+	// Apply context compression if needed
+	if a.ctxManager != nil && len(a.llmMessages) > a.ctxManager.MessageCount() {
+		a.llmMessages = a.ctxManager.CompressMessages(a.llmMessages)
+	}
 
-	for i := range maxIterations {
-		log.Info("LLM iteration", "iteration", i, "messageCount", len(messages))
+	log.Info("agent process started", "cluster", state.ClusterName, "messageCount", len(a.llmMessages))
 
-		textResp, fnCall, err := a.llmSvc.ChatWithFunctions(ctx, messages, llm.K8sFunctions)
+	functions := a.llmSvc.GetFunctions()
+	log.Debug("functions available", "count", len(functions), "functions", functions)
+
+	for {
+		textResp, fnCall, err := a.llmSvc.ChatWithFunctions(context.Background(), a.llmMessages, functions)
+		log.Info("LLM response received", "hasText", textResp != "", "fnCall", fnCall != nil, "err", err)
 		if err != nil {
 			log.Error("LLM call failed", "error", err)
-			return fmt.Errorf("LLM call failed: %w", err)
+			outputChan <- ipc.Output{Type: ipc.OutputTypeError, Content: fmt.Sprintf("LLM call failed: %v", err)}
+			return
 		}
-
-		log.Info("LLM response received", "fnCall", fnCall, "textResp", textResp)
 
 		// Send text response if any
 		if textResp != "" {
-			uiInterface.SendProgress(ui.Progress{
-				Type:      "text",
-				Content:   textResp,
-				Timestamp: time.Now(),
-			})
+			// Parse think tags and send parts in original order
+			parts := parseThinkTags(textResp)
+
+			for _, part := range parts {
+				content := strings.TrimSpace(part.content)
+				if len(content) == 0 {
+					continue
+				}
+				if part.isThink {
+					outputChan <- ipc.Output{
+						Type:    ipc.OutputTypeThink,
+						Content: content,
+					}
+					thinkMsg := session.NewMessage(session.RoleAssistant, content, nil)
+					thinkMsg.MessageType = session.MessageTypeThink
+					a.messages = append(a.messages, thinkMsg)
+					a.addMessageToSession(thinkMsg)
+				} else {
+					outputChan <- ipc.Output{
+						Type:    ipc.OutputTypeText,
+						Content: content,
+					}
+					textMsg := session.NewMessage(session.RoleAssistant, content, nil)
+					textMsg.MessageType = session.MessageTypeText
+					a.messages = append(a.messages, textMsg)
+					a.addMessageToSession(textMsg)
+				}
+			}
 		}
 
-		// If no function call, we're done
+		// If no function call, we're done with this turn
 		if fnCall == nil {
-			// Final response
-			uiInterface.SendMessage(&session.Message{
-				Role:      session.RoleAssistant,
-				Content:   textResp,
-				Timestamp: time.Now(),
-			})
-			uiInterface.Done()
-			return nil
+			// If we had a text response, add it to LLM messages (single message, no tool calls)
+			if textResp != "" {
+				a.llmMessages = append(a.llmMessages, sharedutil.Message{
+					Role:    "assistant",
+					Content: textResp,
+				})
+			}
+			log.Info("Agent sending OutputTypeDone")
+			outputChan <- ipc.Output{Type: ipc.OutputTypeDone}
+			break
 		}
 
 		// Report tool call start
-		uiInterface.SendProgress(ui.Progress{
-			Type:      "tool_call_start",
-			ToolName:  fnCall.Name,
-			ToolArgs:  fnCall.Arguments,
-			Timestamp: time.Now(),
-		})
+		log.Info("Agent sending OutputTypeToolStart", "name", fnCall.Name)
+		outputChan <- ipc.Output{
+			Type:        ipc.OutputTypeToolStart,
+			ToolName:    fnCall.Name,
+			ToolArgs:    fnCall.Arguments,
+			MessageType: string(session.MessageTypeToolCall),
+		}
+		// Record tool start to UI session
+		toolCallMsg := &session.Message{
+			Message: sharedutil.Message{
+				Role:       sharedutil.RoleAssistant,
+				Content:    fmt.Sprintf("执行工具: %s(%s)", fnCall.Name, fnCall.Arguments),
+				ToolCallID: fnCall.ID,
+			},
+			MessageType: session.MessageTypeToolCall,
+			Timestamp:   time.Now(),
+		}
+		a.messages = append(a.messages, toolCallMsg)
+		a.addMessageToSession(toolCallMsg)
 
 		// Execute function call
-		log.Info("Executing function call", "name", fnCall.Name, "args", fnCall.Arguments)
+		log.Info("Agent executing function call", "name", fnCall.Name, "cluster", state.ClusterName)
 		result := a.fnExec.ExecuteFunctionCall(fnCall, state.ClusterName)
-		log.Info("Function execution result", "success", result.Success, "hasClusterSwitch", result.ClusterSwitch != "")
+		if result.Success {
+			if len(result.Result) > 200 {
+				log.Info("Agent function call succeeded", "name", fnCall.Name, "result", result.Result[:200]+"...")
+			} else {
+				log.Info("Agent function call succeeded", "name", fnCall.Name, "result", result.Result)
+			}
+		} else {
+			log.Error("Agent function call failed", "name", fnCall.Name, "cluster", state.ClusterName, "error", result.Error)
+		}
+
+		// Handle cluster switch if requested by function
+		if result.ClusterSwitch != "" {
+			a.SetClusterName(result.ClusterSwitch)
+			outputChan <- ipc.Output{
+				Type:        ipc.OutputTypeText,
+				Content:     fmt.Sprintf("已切换到集群: %s", result.ClusterSwitch),
+				ClusterName: result.ClusterSwitch,
+			}
+		}
 
 		// Report tool result
-		uiInterface.SendProgress(ui.Progress{
-			Type:        "tool_result",
+		log.Info("Agent sending OutputTypeToolResult", "name", fnCall.Name)
+		outputChan <- ipc.Output{
+			Type:        ipc.OutputTypeToolResult,
 			ToolName:    fnCall.Name,
 			ToolArgs:    fnCall.Arguments,
 			ToolResult:  result.Result,
 			ToolSuccess: result.Success,
-			Timestamp:   time.Now(),
-		})
-
-		// Handle cluster switch
-		if result.ClusterSwitch != "" {
-			state.ClusterName = result.ClusterSwitch
-			uiInterface.SetClusterName(result.ClusterSwitch)
-			systemPrompt = BuildSystemPrompt(state.ClusterName)
-			if a.ctxManager != nil {
-				messages = a.ctxManager.BuildContextMessages(systemPrompt, state.SessionMessages, "")
-			} else {
-				messages = []llm.Message{{Role: "system", Content: systemPrompt}}
-				for j := 1; j < len(state.SessionMessages); j++ {
-					messages = append(messages, llm.Message{
-						Role:    string(state.SessionMessages[j].Role),
-						Content: state.SessionMessages[j].Content,
-					})
-				}
-			}
-			fnCallMsg := llm.Message{
-				Role:    "assistant",
-				Content: fmt.Sprintf("[Function Call: %s]\nArguments: %s", fnCall.Name, fnCall.Arguments),
-				ToolCalls: []struct {
-					ID        string
-					Name      string
-					Arguments string
-				}{{ID: fnCall.ID, Name: fnCall.Name, Arguments: fnCall.Arguments}},
-			}
-			messages = append(messages, fnCallMsg)
-			messages = append(messages, llm.Message{
-				Role:       "tool",
+			MessageType: string(session.MessageTypeToolResult),
+		}
+		// Record tool result to UI session
+		toolResultMsg := &session.Message{
+			Message: sharedutil.Message{
+				Role:       sharedutil.RoleAssistant,
 				Content:    result.Result,
 				ToolCallID: fnCall.ID,
-			})
-			continue
+			},
+			MessageType: session.MessageTypeToolResult,
+			Timestamp:   time.Now(),
 		}
+		a.messages = append(a.messages, toolResultMsg)
+		a.addMessageToSession(toolResultMsg)
 
-		// Add function call message
-		fnCallMsg := llm.Message{
+		// Add function call message to LLM history (proper OpenAI format with ToolCalls)
+		a.llmMessages = append(a.llmMessages, sharedutil.Message{
 			Role:    "assistant",
-			Content: fmt.Sprintf("[Function Call: %s]\nArguments: %s", fnCall.Name, fnCall.Arguments),
-			ToolCalls: []struct {
-				ID        string
-				Name      string
-				Arguments string
-			}{{ID: fnCall.ID, Name: fnCall.Name, Arguments: fnCall.Arguments}},
-		}
-		messages = append(messages, fnCallMsg)
+			Content: "",
+			ToolCalls: []sharedutil.ToolCall{{ID: fnCall.ID, Name: fnCall.Name, Arguments: fnCall.Arguments}},
+		})
 
-		// Add function result as tool message
+		// Add function result as tool message to LLM history
 		var toolContent string
 		if result.Success {
-			if strings.HasPrefix(result.Result, "confirmation_required:") {
-				confirmKey, err := a.confirmMgr.CreateConfirmation(state.ClusterName, result.Operation)
-				if err != nil {
-					toolContent = fmt.Sprintf("Error creating confirmation: %s", err.Error())
-				} else {
-					toolContent = fmt.Sprintf("Confirmation required. Use 'k8s-agent confirm %s' to approve.", confirmKey)
-				}
-			} else {
-				toolContent = result.Result
-			}
+			toolContent = result.Result
 		} else {
 			toolContent = fmt.Sprintf("Error: %s", result.Error)
 		}
-		messages = append(messages, llm.Message{
+		a.llmMessages = append(a.llmMessages, sharedutil.Message{
 			Role:       "tool",
 			Content:    toolContent,
 			ToolCallID: fnCall.ID,
 		})
-
-		// Check if we should re-apply context compression
-		if a.ctxManager != nil && len(messages) > a.ctxManager.MessageCount()*2 {
-			tempMessages := make([]*session.Message, 0, len(messages))
-			for _, m := range messages[1:] {
-				tempMessages = append(tempMessages, &session.Message{
-					Role:    session.Role(m.Role),
-					Content: m.Content,
-				})
-			}
-			state.SessionMessages = tempMessages
-			messages = a.ctxManager.BuildContextMessages(systemPrompt, state.SessionMessages, "")
-		}
 	}
-
-	return fmt.Errorf("maximum function call iterations reached")
 }
 
-// addMessageToSession adds a message to the session and persists it
-func (a *Agent) addMessageToSession(role session.Role, content string, metadata map[string]string) {
+// addMessageToSession adds a structured message to the session and persists it
+func (a *Agent) addMessageToSession(msg *session.Message) {
 	if a.store == nil {
 		return
 	}
 
 	a.store.UpdateConversation(a.sessionID, func(conv *session.Conversation) error {
-		conv.AddMessage(session.NewMessage(role, content, metadata))
+		conv.AddMessage(msg)
 		return nil
 	})
 }
@@ -269,6 +457,227 @@ func (a *Agent) SetClusterName(clusterName string) {
 			return nil
 		})
 	}
+}
+
+// handleClustersCommand handles the /clusters command
+func (a *Agent) handleClustersCommand(outputChan chan<- ipc.Output) {
+	var clusters []string
+	if a.clusterLister != nil {
+		clusters = a.clusterLister.ListClusters()
+	}
+	if len(clusters) == 0 {
+		clusters = []string{"(no clusters configured)"}
+	}
+
+	// Use markdown list format for proper rendering
+	content := "可用集群:\n"
+	for _, c := range clusters {
+		content += "- " + c + "\n"
+	}
+
+	outputChan <- ipc.Output{
+		Type:    ipc.OutputTypeText,
+		Content: content,
+	}
+	clustersMsg := session.NewMessage(session.RoleAssistant, content, nil)
+	clustersMsg.MessageType = session.MessageTypeText
+	a.messages = append(a.messages, clustersMsg)
+	a.addMessageToSession(clustersMsg)
+
+	outputChan <- ipc.Output{Type: ipc.OutputTypeDone}
+}
+
+// handleConfigCommand handles the /config command
+// Supports: /config (full config), /config <section> (e.g., /config llm), /config <section>.<field> (e.g., /config llm.apikey)
+func (a *Agent) handleConfigCommand(cmd string, outputChan chan<- ipc.Output) {
+	content := ""
+
+	if a.configContent == "" {
+		content = "(no config file content available)"
+	} else {
+		// Parse the path from command (e.g., "/config llm.apikey" -> "llm.apikey")
+		path := strings.TrimPrefix(cmd, "/config")
+		path = strings.TrimSpace(path)
+
+		if path == "" {
+			// No path specified, show full config (parse and re-marshal to strip comments)
+			content = "```\n" + a.getConfigByPath("") + "\n```"
+		} else {
+			// Parse YAML and extract the requested path
+			content = "```\n" + a.getConfigByPath(path) + "\n```"
+		}
+	}
+
+	outputChan <- ipc.Output{
+		Type:    ipc.OutputTypeText,
+		Content: content,
+	}
+	configMsg := session.NewMessage(session.RoleAssistant, content, nil)
+	configMsg.MessageType = session.MessageTypeText
+	a.messages = append(a.messages, configMsg)
+	a.addMessageToSession(configMsg)
+
+	outputChan <- ipc.Output{Type: ipc.OutputTypeDone}
+}
+
+// handleClusterCommand handles the /cluster <name> command to switch cluster
+func (a *Agent) handleClusterCommand(cmd string, outputChan chan<- ipc.Output) {
+	// Extract cluster name from command
+	clusterName := strings.TrimPrefix(cmd, "/cluster ")
+	clusterName = strings.TrimSpace(clusterName)
+
+	if clusterName == "" {
+		content := "用法: /cluster <集群名称>\n当前集群: " + a.clusterName
+		outputChan <- ipc.Output{
+			Type:    ipc.OutputTypeText,
+			Content: content,
+		}
+		usageMsg := session.NewMessage(session.RoleAssistant, content, nil)
+		usageMsg.MessageType = session.MessageTypeText
+		a.messages = append(a.messages, usageMsg)
+		a.addMessageToSession(usageMsg)
+		outputChan <- ipc.Output{Type: ipc.OutputTypeDone}
+		return
+	}
+
+	// Validate cluster exists
+	if a.clusterLister != nil {
+		found := false
+		for _, c := range a.clusterLister.ListClusters() {
+			if c == clusterName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			content := fmt.Sprintf("集群 '%s' 不存在", clusterName)
+			outputChan <- ipc.Output{
+				Type:    ipc.OutputTypeText,
+				Content: content,
+			}
+			notFoundMsg := session.NewMessage(session.RoleAssistant, content, nil)
+			notFoundMsg.MessageType = session.MessageTypeText
+			a.messages = append(a.messages, notFoundMsg)
+			a.addMessageToSession(notFoundMsg)
+			outputChan <- ipc.Output{Type: ipc.OutputTypeDone}
+			return
+		}
+	}
+
+	// Switch cluster
+	a.SetClusterName(clusterName)
+	content := fmt.Sprintf("已切换到集群: %s", clusterName)
+	outputChan <- ipc.Output{
+		Type:        ipc.OutputTypeText,
+		Content:     content,
+		ClusterName: clusterName,
+	}
+	switchedMsg := session.NewMessage(session.RoleAssistant, content, nil)
+	switchedMsg.MessageType = session.MessageTypeText
+	a.messages = append(a.messages, switchedMsg)
+	a.addMessageToSession(switchedMsg)
+
+	outputChan <- ipc.Output{Type: ipc.OutputTypeDone}
+}
+
+// getConfigByPath extracts a specific path from YAML config
+func (a *Agent) getConfigByPath(path string) string {
+	// Parse the YAML content
+	var result map[string]interface{}
+	if err := yaml.Unmarshal([]byte(a.configContent), &result); err != nil {
+		return fmt.Sprintf("failed to parse config: %v", err)
+	}
+
+	// If path is empty, return full config as key-value pairs
+	if path == "" {
+		return formatConfigFlat(result, "")
+	}
+
+	// Navigate through the path (e.g., "llm.apikey" -> result["llm"]["apikey"])
+	parts := strings.Split(path, ".")
+	current := interface{}(result)
+
+	for i, part := range parts {
+		if current == nil {
+			return fmt.Sprintf("path not found: %s (at '%s')", path, strings.Join(parts[:i], "."))
+		}
+
+		if m, ok := current.(map[string]interface{}); ok {
+			current = m[part]
+		} else {
+			return fmt.Sprintf("path not found: %s (at '%s' - not a map)", path, strings.Join(parts[:i], "."))
+		}
+	}
+
+	if current == nil {
+		return fmt.Sprintf("path not found: %s", path)
+	}
+
+	// Format the result
+	switch v := current.(type) {
+	case string:
+		if v == "" {
+			return fmt.Sprintf("%s: (empty)", path)
+		}
+		return fmt.Sprintf("%s: %s", path, v)
+	case int, float64, bool:
+		return fmt.Sprintf("%s: %v", path, v)
+	case map[string]interface{}:
+		// If it's a map, show it as flat key-value pairs
+		return formatConfigFlat(v, path)
+	default:
+		return fmt.Sprintf("%s: %v", path, v)
+	}
+}
+
+// formatYAMLOutput formats compact YAML into properly indented multi-line output
+func formatYAMLOutput(compact string) string {
+	var buf bytes.Buffer
+	lines := strings.Split(compact, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimRight(line, " ")
+		if trimmed != "" {
+			buf.WriteString(trimmed + "\n")
+		}
+	}
+	return buf.String()
+}
+
+// formatConfigFlat formats config as flat key-value pairs for better readability
+func formatConfigFlat(data map[string]interface{}, prefix string) string {
+	var result string
+	if prefix != "" {
+		result = prefix + ":\n"
+	} else {
+		result = "配置内容:\n"
+	}
+	for key, value := range data {
+		fullKey := key
+		if prefix != "" {
+			fullKey = prefix + "." + key
+		}
+		switch v := value.(type) {
+		case string:
+			result += fmt.Sprintf("  %s: %s\n", key, v)
+		case int, float64, bool:
+			result += fmt.Sprintf("  %s: %v\n", key, v)
+		case map[string]interface{}:
+			result += formatConfigFlat(v, fullKey)
+		}
+	}
+	return result
+}
+
+// yamlMarshalIndent marshals v to YAML with proper indentation
+func yamlMarshalIndent(v interface{}) ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(v); err != nil {
+		return nil, err
+	}
+	encoder.Close()
+	return buf.Bytes(), nil
 }
 
 // State tracks the conversation state

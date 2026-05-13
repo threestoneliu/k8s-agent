@@ -4,16 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"k8s-agent/pkg/cluster"
-	"k8s-agent/pkg/confirmation"
-	"k8s-agent/pkg/engine"
+	"k8s-agent/pkg/k8s"
 	"k8s-agent/pkg/llm"
 	"k8s-agent/pkg/log"
-	"k8s-agent/pkg/scheduler"
 	"k8s-agent/pkg/session"
 )
 
@@ -22,12 +19,11 @@ type RootCommand struct {
 	manager           *session.Manager
 	executor          *engine.Executor
 	llmExecutor       *llm.Executor
-	confirmMgr        *confirmation.Manager
-	schedulerMgr      *scheduler.Manager
 	clusterReg        *cluster.Registry
 	llmService        *llm.Service
 	currentClusterCtx string
 	appConfig         *cluster.AppConfig
+	configPath        string
 }
 
 // NewRootCommand creates the root command
@@ -69,21 +65,10 @@ func NewRootCommand() *cobra.Command {
 		clusterReg = cluster.NewRegistry()
 	}
 
-	// Initialize scheduler store for task persistence
-	schedulerStore, err := scheduler.NewStore("")
-	if err != nil {
-		schedulerStore = nil
-	}
-
-	confirmMgr := confirmation.NewManager(5 * time.Minute) // 5 minute TTL
 	exec := engine.NewExecutor(clusterReg)
 
-	// Configure scheduler with executor and store
-	schedulerMgr := scheduler.NewManagerWithStore(exec, schedulerStore)
-	schedulerMgr.Start() // Start the cron scheduler
-
 	// Create LLM executor for confirmed operations
-	llmExec := llm.NewExecutorWithScheduler(exec, schedulerMgr)
+	llmExec := llm.NewExecutor(exec)
 
 	// Initialize session manager with file-based storage if configured
 	var sessionMgr *session.Manager
@@ -107,20 +92,13 @@ func NewRootCommand() *cobra.Command {
 
 	// Initialize LLM service with config
 	var llmSvc *llm.Service
-	llmCfg := &llm.Config{
-		Provider:    appCfg.LLM.Provider,
+	llmCfg := &llm.LLMConfig{
 		APIKey:      appCfg.LLM.APIKey,
 		Model:       appCfg.LLM.Model,
 		BaseURL:     appCfg.LLM.BaseURL,
-		Timeout:     appCfg.LLM.Timeout,
-		Temperature: appCfg.LLM.Temperature,
 		MaxTokens:   appCfg.LLM.MaxTokens,
 	}
-	llmSvc, err = llm.NewService(llmCfg)
-	if err != nil {
-		// Fall back to nil LLM service - will use simple parser
-		llmSvc = nil
-	}
+	llmSvc = llm.NewService(llmCfg)
 
 	// Get current cluster context
 	currentCluster := ""
@@ -139,12 +117,11 @@ func NewRootCommand() *cobra.Command {
 		manager:           sessionMgr,
 		executor:          exec,
 		llmExecutor:       llmExec,
-		confirmMgr:        confirmMgr,
-		schedulerMgr:      schedulerMgr,
 		clusterReg:        clusterReg,
 		llmService:        llmSvc,
 		currentClusterCtx: currentCluster,
 		appConfig:         appCfg,
+		configPath:        configPath,
 	}
 
 	// Create the root command
@@ -168,15 +145,7 @@ func NewRootCommand() *cobra.Command {
 
 	// Add subcommands
 	rootCmd.AddCommand(rc.newChatCommand())
-	rootCmd.AddCommand(rc.newGetCommand())
-	rootCmd.AddCommand(rc.newListCommand())
-	rootCmd.AddCommand(rc.newDescribeCommand())
-	rootCmd.AddCommand(rc.newDeleteCommand())
-	rootCmd.AddCommand(rc.newCreateCommand())
-	rootCmd.AddCommand(rc.newScaleCommand())
 	rootCmd.AddCommand(rc.newClusterCommand())
-	rootCmd.AddCommand(rc.newTaskCommand())
-	rootCmd.AddCommand(rc.newConfirmCommand())
 
 	// Configure viper
 	viper.AutomaticEnv()
@@ -184,55 +153,10 @@ func NewRootCommand() *cobra.Command {
 	return rootCmd
 }
 
-// GetManager returns the session manager
-func (rc *RootCommand) GetManager() *session.Manager {
-	return rc.manager
-}
-
-// GetExecutor returns the executor
-func (rc *RootCommand) GetExecutor() *engine.Executor {
-	return rc.executor
-}
-
-// GetConfirmManager returns the confirmation manager
-func (rc *RootCommand) GetConfirmManager() *confirmation.Manager {
-	return rc.confirmMgr
-}
-
-// GetSchedulerManager returns the scheduler manager
-func (rc *RootCommand) GetSchedulerManager() *scheduler.Manager {
-	return rc.schedulerMgr
-}
-
-// GetClusterRegistry returns the cluster registry
-func (rc *RootCommand) GetClusterRegistry() *cluster.Registry {
-	return rc.clusterReg
-}
-
-// GetLLMService returns the LLM service
-func (rc *RootCommand) GetLLMService() *llm.Service {
-	return rc.llmService
-}
-
-// GetCurrentClusterCtx returns the current cluster context
-func (rc *RootCommand) GetCurrentClusterCtx() string {
-	return rc.currentClusterCtx
-}
-
 // GetAppConfig returns the app configuration
 func (rc *RootCommand) GetAppConfig() *cluster.AppConfig {
 	return rc.appConfig
 }
-
-// Helper function to check if cluster is configured
-func (rc *RootCommand) requireCluster() error {
-	if rc.clusterReg == nil {
-		return fmt.Errorf("no cluster configured")
-	}
-	return nil
-}
-
-// Helper function to get current cluster
 func (rc *RootCommand) getCurrentCluster() string {
 	if rc.clusterReg == nil {
 		return ""

@@ -3,45 +3,50 @@ package session
 import (
 	"errors"
 	"time"
+
+	sharedutil "k8s-agent/pkg/shared"
 )
 
-// Role represents the role of a message sender
-type Role string
-
-// Message roles
+// Role constants (OpenAI standard - using shared constants)
 const (
-	RoleUser      Role = "user"
-	RoleAssistant Role = "assistant"
-	RoleSystem    Role = "system"
+	RoleUser      = sharedutil.RoleUser
+	RoleAssistant = sharedutil.RoleAssistant
+	RoleSystem    = sharedutil.RoleSystem
+)
+
+// MessageType constants for UI rendering
+const (
+	MessageTypeText        = "text"
+	MessageTypeThink       = "think"
+	MessageTypeUser        = "user"
+	MessageTypeToolCall    = "tool_call"
+	MessageTypeToolResult  = "tool_result"
 )
 
 // Message represents a single message in a conversation
+// Embeds shared.Message for Role, Content, ToolCalls, ToolCallID
 type Message struct {
-	Role      Role              `json:"role"`
-	Content   string            `json:"content"`
-	Think     string            `json:"think,omitempty"`   // LLM thinking content
-	ToolCalls []ToolCall        `json:"tool_calls,omitempty"` // Tool/Function calls
-	Timestamp time.Time         `json:"timestamp"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-}
-
-// ToolCall represents a tool/function call made during conversation
-type ToolCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
+	sharedutil.Message
+	// UI fields
+	MessageType string            `json:"message_type"`
+	Think       string            `json:"think,omitempty"`
+	Timestamp   time.Time        `json:"timestamp"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 // NewMessage creates a new message with the given role and content
-func NewMessage(role Role, content string, metadata map[string]string) *Message {
+func NewMessage(role string, content string, metadata map[string]string) *Message {
 	if content == "" {
 		panic(errors.New("message content cannot be empty"))
 	}
 
 	return &Message{
-		Role:      role,
-		Content:   content,
+		Message: sharedutil.Message{
+			Role:    role,
+			Content: content,
+		},
 		Timestamp: time.Now(),
-		Metadata:  metadata,
+		Metadata: metadata,
 	}
 }
 
@@ -83,7 +88,7 @@ func (c *Conversation) GetLastMessage() *Message {
 }
 
 // GetMessagesByRole returns all messages with the given role
-func (c *Conversation) GetMessagesByRole(role Role) []*Message {
+func (c *Conversation) GetMessagesByRole(role string) []*Message {
 	result := make([]*Message, 0, len(c.Messages))
 	for _, msg := range c.Messages {
 		if msg.Role == role {

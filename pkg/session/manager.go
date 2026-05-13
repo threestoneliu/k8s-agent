@@ -67,7 +67,7 @@ func (m *Manager) GetConversation(id string) (*Conversation, error) {
 }
 
 // AddMessage adds a message to a conversation
-func (m *Manager) AddMessage(conversationID string, role Role, content string, metadata map[string]string) error {
+func (m *Manager) AddMessage(conversationID string, role string, content string, metadata map[string]string) error {
 	if content == "" {
 		return ErrMessageEmpty
 	}

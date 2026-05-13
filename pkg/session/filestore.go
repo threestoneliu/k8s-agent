@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	sharedutil "k8s-agent/pkg/shared"
 )
 
 const (
@@ -31,16 +33,20 @@ type FileStore struct {
 
 // FileMessage represents a message stored in JSONL format
 type FileMessage struct {
-	Role      string            `json:"role"`
-	Content   string            `json:"content"`
-	Think     string            `json:"think,omitempty"`
-	ToolCalls []FileToolCall    `json:"tool_calls,omitempty"`
-	Timestamp string           `json:"timestamp"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
+	Role        string            `json:"role"`
+	Content     string            `json:"content"`
+	MessageType string            `json:"message_type,omitempty"`
+	Think       string            `json:"think,omitempty"`
+	ToolCallID  string            `json:"tool_call_id,omitempty"`
+	ToolCalls   []FileToolCall    `json:"tool_calls,omitempty"`
+	Success     bool              `json:"success,omitempty"`
+	Timestamp   string           `json:"timestamp"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 // FileToolCall represents a tool call stored in JSONL format
 type FileToolCall struct {
+	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
 }
@@ -97,7 +103,7 @@ func (s *FileStore) filePath(sessionID string) string {
 	return filepath.Join(s.storageDir, sessionID+".jsonl")
 }
 
-// loadConversation loads a single conversation from file
+// loadConversation loads a single conversation from file in JSONL format
 func (s *FileStore) loadConversation(sessionID string) (*Conversation, error) {
 	filePath := s.filePath(sessionID)
 	file, err := os.Open(filePath)
@@ -106,86 +112,91 @@ func (s *FileStore) loadConversation(sessionID string) (*Conversation, error) {
 	}
 	defer file.Close()
 
-	var conv FileConversation
+	messages := make([]*Message, 0)
 	scanner := bufio.NewScanner(file)
-	if scanner.Scan() {
-		if err := json.Unmarshal(scanner.Bytes(), &conv); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal conversation: %w", err)
+	for scanner.Scan() {
+		var fm FileMessage
+		if err := json.Unmarshal(scanner.Bytes(), &fm); err != nil {
+			continue // Skip malformed lines
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to read conversation: %w", err)
-	}
 
-	// Convert to domain model
-	messages := make([]*Message, 0, len(conv.Messages))
-	for _, fm := range conv.Messages {
-		toolCalls := make([]ToolCall, 0, len(fm.ToolCalls))
+		toolCalls := make([]sharedutil.ToolCall, 0, len(fm.ToolCalls))
 		for _, tc := range fm.ToolCalls {
-			toolCalls = append(toolCalls, ToolCall{
+			toolCalls = append(toolCalls, sharedutil.ToolCall{
+				ID:        tc.ID,
 				Name:      tc.Name,
 				Arguments: tc.Arguments,
 			})
 		}
 		messages = append(messages, &Message{
-			Role:      Role(fm.Role),
-			Content:   fm.Content,
-			Think:     fm.Think,
-			ToolCalls: toolCalls,
-			Timestamp: parseTimestamp(fm.Timestamp),
-			Metadata:  fm.Metadata,
+			Message: sharedutil.Message{
+				Role:       fm.Role,
+				Content:    fm.Content,
+				ToolCallID: fm.ToolCallID,
+				ToolCalls:  toolCalls,
+			},
+			MessageType: fm.MessageType,
+			Think:       fm.Think,
+			Timestamp:   parseTimestamp(fm.Timestamp),
+			Metadata:    fm.Metadata,
 		})
 	}
 
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read conversation: %w", err)
+	}
+
 	return &Conversation{
-		ID:          conv.ID,
-		ClusterName: conv.ClusterName,
-		Namespace:   conv.Namespace,
-		Messages:    messages,
-		CreatedAt:   parseTimestamp(conv.CreatedAt),
-		UpdatedAt:   parseTimestamp(conv.UpdatedAt),
+		ID:       sessionID,
+		Messages: messages,
 	}, nil
 }
 
 // saveConversation saves a conversation to file in JSONL format
+// Each message is saved as a separate line
 func (s *FileStore) saveConversation(conv *Conversation) error {
 	filePath := s.filePath(conv.ID)
 
-	// Convert to file format
-	messages := make([]FileMessage, 0, len(conv.Messages))
+	// Open file for writing
+	file, err := os.Create(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	defer file.Close()
+
+	// Write each message as a separate JSON line
 	for _, m := range conv.Messages {
 		toolCalls := make([]FileToolCall, 0, len(m.ToolCalls))
 		for _, tc := range m.ToolCalls {
 			toolCalls = append(toolCalls, FileToolCall{
+				ID:        tc.ID,
 				Name:      tc.Name,
 				Arguments: tc.Arguments,
 			})
 		}
-		messages = append(messages, FileMessage{
-			Role:      string(m.Role),
-			Content:   m.Content,
-			Think:     m.Think,
-			ToolCalls: toolCalls,
-			Timestamp: m.Timestamp.Format("2006-01-02T15:04:05.000Z"),
-			Metadata:  m.Metadata,
-		})
+
+		fileMsg := FileMessage{
+			Role:        string(m.Message.Role),
+			Content:     m.Message.Content,
+			MessageType: m.MessageType,
+			Think:       m.Think,
+			ToolCallID:  m.Message.ToolCallID,
+			ToolCalls:   toolCalls,
+			Timestamp:   m.Timestamp.Format("2006-01-02T15:04:05.000Z"),
+			Metadata:    m.Metadata,
+		}
+
+		data, err := json.Marshal(fileMsg)
+		if err != nil {
+			return fmt.Errorf("failed to marshal message: %w", err)
+		}
+
+		if _, err := file.Write(append(data, '\n')); err != nil {
+			return fmt.Errorf("failed to write message: %w", err)
+		}
 	}
 
-	fileConv := FileConversation{
-		ID:          conv.ID,
-		ClusterName: conv.ClusterName,
-		Namespace:   conv.Namespace,
-		Messages:    messages,
-		CreatedAt:   conv.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
-		UpdatedAt:   conv.UpdatedAt.Format("2006-01-02T15:04:05.000Z"),
-	}
-
-	data, err := json.Marshal(fileConv)
-	if err != nil {
-		return fmt.Errorf("failed to marshal conversation: %w", err)
-	}
-
-	return os.WriteFile(filePath, data, 0644)
+	return nil
 }
 
 // touchLRU moves session to end of LRU list (most recently used)

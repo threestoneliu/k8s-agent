@@ -18,7 +18,7 @@ go test -cover ./...
 go test -race ./...
 
 # Run single test
-go test ./pkg/engine/... -run TestParser -v
+go test ./pkg/k8s/... -run TestParser -v
 ```
 
 ## Architecture
@@ -36,11 +36,10 @@ k8s-agent 是一个提供自然语言界面的 Kubernetes CLI 工具，包含意
 ### 核心组件
 
 - **cmd/cli/** - Cobra CLI 命令层，包括 chat 交互模式
-- **pkg/engine/** - 核心引擎：Parser（解析）、Classifier（分类）、Executor（执行）
-- **pkg/llm/** - LLM 集成层，支持 OpenAI/Anthropic/Ollama，通过 Function Calling 实现意图识别
+- **pkg/k8s/** - 核心引擎：Executor（执行）
+- **pkg/llm/** - LLM 集成层，支持 OpenAI，通过 Function Calling 实现意图识别
 - **pkg/confirmation/** - 人工确认管理器，Mutation 操作需要确认
 - **pkg/cluster/** - 多集群管理，Registry 管理 kubeconfig
-- **pkg/scheduler/** - 定时任务调度，持久化到 `~/.config/k8s-agent/tasks.yaml`
 - **pkg/session/** - 会话管理
 
 ### 操作分类
@@ -53,5 +52,19 @@ k8s-agent 是一个提供自然语言界面的 Kubernetes CLI 工具，包含意
 
 项目使用 LLM 进行自然语言理解和 Function Calling：
 - 配置通过 `config.example.yaml` 或环境变量
-- 支持 OpenAI (GPT-4)、Anthropic (Claude)、Ollama
+- 支持 OpenAI (GPT-4)
 - 通过 `pkg/llm/executor.go` 统一调用入口
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five-role state machine: needs-triage → needs-info → ready-for-agent/ready-for-human → wontfix. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at repo root. See `docs/agents/domain.md`.

@@ -27,7 +27,7 @@ func TestRootCommandSubCommands(t *testing.T) {
 	}
 
 	// Verify expected subcommands exist
-	expectedCommands := []string{"chat", "get", "list", "describe", "delete", "create", "scale", "cluster", "task", "confirm"}
+	expectedCommands := []string{"chat", "cluster"}
 	for _, expected := range expectedCommands {
 		found := false
 		for _, name := range subCommandNames {
@@ -89,28 +89,3 @@ func TestClusterCommand(t *testing.T) {
 	}
 }
 
-func TestTaskCommand(t *testing.T) {
-	cmd := NewRootCommand()
-	taskCmd, _, err := cmd.Find([]string{"task"})
-	require.NoError(t, err)
-	assert.Equal(t, "task", taskCmd.Name())
-
-	// Task should have subcommands
-	subCommands := taskCmd.Commands()
-	subCommandNames := make([]string, len(subCommands))
-	for i, sub := range subCommands {
-		subCommandNames[i] = sub.Name()
-	}
-
-	expectedTaskCommands := []string{"list", "create", "delete", "run", "results"}
-	for _, expected := range expectedTaskCommands {
-		found := false
-		for _, name := range subCommandNames {
-			if name == expected {
-				found = true
-				break
-			}
-		}
-		assert.True(t, found, "Expected task subcommand %q not found", expected)
-	}
-}

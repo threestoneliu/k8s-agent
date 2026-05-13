@@ -3,17 +3,19 @@ package session
 import (
 	"testing"
 	"time"
+
+	sharedutil "k8s-agent/pkg/shared"
 )
 
 func TestMessage_Roles(t *testing.T) {
 	tests := []struct {
 		name     string
-		role     Role
+		role     string
 		expected string
 	}{
-		{"user role", RoleUser, "user"},
-		{"assistant role", RoleAssistant, "assistant"},
-		{"system role", RoleSystem, "system"},
+		{"user role", sharedutil.RoleUser, "user"},
+		{"assistant role", sharedutil.RoleAssistant, "assistant"},
+		{"system role", sharedutil.RoleSystem, "system"},
 	}
 
 	for _, tt := range tests {
@@ -28,24 +30,24 @@ func TestMessage_Roles(t *testing.T) {
 func TestMessage_NewMessage(t *testing.T) {
 	tests := []struct {
 		name      string
-		role      Role
+		role      string
 		content   string
 		metadata  map[string]string
 		wantPanic bool
 	}{
 		{
 			name:    "user message",
-			role:    RoleUser,
+			role:    sharedutil.RoleUser,
 			content: "Hello, how are you?",
 		},
 		{
 			name:    "assistant message",
-			role:    RoleAssistant,
+			role:    sharedutil.RoleAssistant,
 			content: "I'm doing well, thank you!",
 		},
 		{
 			name:    "system message",
-			role:    RoleSystem,
+			role:    sharedutil.RoleSystem,
 			content: "You are a helpful assistant.",
 		},
 	}
@@ -54,11 +56,11 @@ func TestMessage_NewMessage(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			msg := NewMessage(tt.role, tt.content, tt.metadata)
 
-			if msg.Role != tt.role {
-				t.Errorf("Role = %v, want %v", msg.Role, tt.role)
+			if msg.Message.Role != tt.role {
+				t.Errorf("Role = %v, want %v", msg.Message.Role, tt.role)
 			}
-			if msg.Content != tt.content {
-				t.Errorf("Content = %v, want %v", msg.Content, tt.content)
+			if msg.Message.Content != tt.content {
+				t.Errorf("Content = %v, want %v", msg.Message.Content, tt.content)
 			}
 			if tt.metadata != nil {
 				for k, v := range tt.metadata {
@@ -81,12 +83,12 @@ func TestMessage_NewMessage_EmptyContentPanics(t *testing.T) {
 		}
 	}()
 
-	NewMessage(RoleUser, "", nil)
+	NewMessage(sharedutil.RoleUser, "", nil)
 }
 
 func TestMessage_TimestampIsSet(t *testing.T) {
 	before := time.Now()
-	msg := NewMessage(RoleUser, "test", nil)
+	msg := NewMessage(sharedutil.RoleUser, "test", nil)
 	after := time.Now()
 
 	if msg.Timestamp.Before(before) || msg.Timestamp.After(after) {
@@ -120,8 +122,8 @@ func TestConversation_NewConversation(t *testing.T) {
 func TestConversation_AddMessage(t *testing.T) {
 	conv := NewConversation("test-session", "", "")
 
-	userMsg := NewMessage(RoleUser, "Hello", nil)
-	assistantMsg := NewMessage(RoleAssistant, "Hi there!", nil)
+	userMsg := NewMessage(sharedutil.RoleUser, "Hello", nil)
+	assistantMsg := NewMessage(sharedutil.RoleAssistant, "Hi there!", nil)
 
 	conv.AddMessage(userMsg)
 	conv.AddMessage(assistantMsg)
@@ -130,11 +132,11 @@ func TestConversation_AddMessage(t *testing.T) {
 		t.Errorf("Messages count = %d, want 2", len(conv.Messages))
 	}
 
-	if conv.Messages[0].Role != RoleUser {
-		t.Errorf("First message role = %v, want RoleUser", conv.Messages[0].Role)
+	if conv.Messages[0].Message.Role != sharedutil.RoleUser {
+		t.Errorf("First message role = %v, want RoleUser", conv.Messages[0].Message.Role)
 	}
-	if conv.Messages[1].Role != RoleAssistant {
-		t.Errorf("Second message role = %v, want RoleAssistant", conv.Messages[1].Role)
+	if conv.Messages[1].Message.Role != sharedutil.RoleAssistant {
+		t.Errorf("Second message role = %v, want RoleAssistant", conv.Messages[1].Message.Role)
 	}
 }
 
@@ -145,7 +147,7 @@ func TestConversation_UpdatedAtChanges(t *testing.T) {
 	// Small sleep to ensure time difference
 	time.Sleep(time.Millisecond)
 
-	userMsg := NewMessage(RoleUser, "Hello", nil)
+	userMsg := NewMessage(sharedutil.RoleUser, "Hello", nil)
 	conv.AddMessage(userMsg)
 
 	if !conv.UpdatedAt.After(originalUpdatedAt) {
@@ -161,37 +163,37 @@ func TestConversation_GetLastMessage(t *testing.T) {
 		t.Error("GetLastMessage should return nil when no messages")
 	}
 
-	userMsg := NewMessage(RoleUser, "Hello", nil)
+	userMsg := NewMessage(sharedutil.RoleUser, "Hello", nil)
 	conv.AddMessage(userMsg)
 
 	lastMsg := conv.GetLastMessage()
 	if lastMsg == nil {
 		t.Error("GetLastMessage should return last message")
 	}
-	if lastMsg.Content != "Hello" {
-		t.Errorf("Last message content = %v, want Hello", lastMsg.Content)
+	if lastMsg.Message.Content != "Hello" {
+		t.Errorf("Last message content = %v, want Hello", lastMsg.Message.Content)
 	}
 }
 
 func TestConversation_GetMessagesByRole(t *testing.T) {
 	conv := NewConversation("test-session", "", "")
 
-	conv.AddMessage(NewMessage(RoleUser, "Hello", nil))
-	conv.AddMessage(NewMessage(RoleAssistant, "Hi", nil))
-	conv.AddMessage(NewMessage(RoleUser, "How are you?", nil))
-	conv.AddMessage(NewMessage(RoleSystem, "Be helpful", nil))
+	conv.AddMessage(NewMessage(sharedutil.RoleUser, "Hello", nil))
+	conv.AddMessage(NewMessage(sharedutil.RoleAssistant, "Hi", nil))
+	conv.AddMessage(NewMessage(sharedutil.RoleUser, "How are you?", nil))
+	conv.AddMessage(NewMessage(sharedutil.RoleSystem, "Be helpful", nil))
 
-	userMessages := conv.GetMessagesByRole(RoleUser)
+	userMessages := conv.GetMessagesByRole(sharedutil.RoleUser)
 	if len(userMessages) != 2 {
 		t.Errorf("User messages count = %d, want 2", len(userMessages))
 	}
 
-	assistantMessages := conv.GetMessagesByRole(RoleAssistant)
+	assistantMessages := conv.GetMessagesByRole(sharedutil.RoleAssistant)
 	if len(assistantMessages) != 1 {
 		t.Errorf("Assistant messages count = %d, want 1", len(assistantMessages))
 	}
 
-	systemMessages := conv.GetMessagesByRole(RoleSystem)
+	systemMessages := conv.GetMessagesByRole(sharedutil.RoleSystem)
 	if len(systemMessages) != 1 {
 		t.Errorf("System messages count = %d, want 1", len(systemMessages))
 	}
@@ -225,8 +227,8 @@ func TestConversation_MessageCount(t *testing.T) {
 		t.Errorf("Initial count = %d, want 0", conv.MessageCount())
 	}
 
-	conv.AddMessage(NewMessage(RoleUser, "Hello", nil))
-	conv.AddMessage(NewMessage(RoleAssistant, "Hi", nil))
+	conv.AddMessage(NewMessage(sharedutil.RoleUser, "Hello", nil))
+	conv.AddMessage(NewMessage(sharedutil.RoleAssistant, "Hi", nil))
 
 	if conv.MessageCount() != 2 {
 		t.Errorf("Count after adding = %d, want 2", conv.MessageCount())

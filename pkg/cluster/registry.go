@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -27,10 +29,12 @@ type ClusterConfig struct {
 
 // Registry manages multiple Kubernetes cluster connections
 type Registry struct {
-	mu       sync.RWMutex
-	store    *Store
-	clusters map[string]*ClusterConfig
-	clients  map[string]kubernetes.Interface
+	mu             sync.RWMutex
+	store          *Store
+	clusters       map[string]*ClusterConfig
+	clients        map[string]kubernetes.Interface
+	dynamic        map[string]dynamic.Interface
+	resourceCache  *ResourceCache
 }
 
 // RegistryOption is a functional option for Registry
@@ -46,8 +50,10 @@ func WithStore(store *Store) RegistryOption {
 // NewRegistry creates a new cluster registry
 func NewRegistry(opts ...RegistryOption) *Registry {
 	r := &Registry{
-		clusters: make(map[string]*ClusterConfig),
-		clients:  make(map[string]kubernetes.Interface),
+		clusters:      make(map[string]*ClusterConfig),
+		clients:       make(map[string]kubernetes.Interface),
+		dynamic:       make(map[string]dynamic.Interface),
+		resourceCache: NewResourceCache(5 * time.Minute),
 	}
 
 	for _, opt := range opts {
@@ -101,6 +107,35 @@ func (r *Registry) GetClusterContext(ctx context.Context, name string) (kubernet
 	}
 
 	return client, nil
+}
+
+// GetDynamicCluster returns a dynamic client for a given cluster name
+func (r *Registry) GetDynamicCluster(name string) (dynamic.Interface, error) {
+	if name == "" {
+		return nil, ErrClusterNotFound
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	cfg, ok := r.clusters[name]
+	if !ok {
+		return nil, ErrClusterNotFound
+	}
+
+	dynClient, ok := r.dynamic[name]
+	if !ok {
+		// Lazy load the dynamic client
+		var err error
+		dynClient, err = r.buildDynamicClient(cfg.Kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build dynamic client: %w", err)
+		}
+		r.dynamic[name] = dynClient
+		return dynClient, nil
+	}
+
+	return dynClient, nil
 }
 
 // ListClusterNames returns all configured cluster names
@@ -199,6 +234,11 @@ func (r *Registry) SetCurrentCluster(name string) error {
 	return r.store.SetCurrentCluster(name)
 }
 
+// GetResourceCache returns the resource cache for the registry
+func (r *Registry) GetResourceCache() *ResourceCache {
+	return r.resourceCache
+}
+
 // buildClient builds a kubernetes client from a kubeconfig path
 func (r *Registry) buildClient(kubeconfigPath string) (kubernetes.Interface, error) {
 	if kubeconfigPath == "" {
@@ -224,4 +264,31 @@ func (r *Registry) buildClient(kubeconfigPath string) (kubernetes.Interface, err
 	}
 
 	return client, nil
+}
+
+// buildDynamicClient builds a dynamic client from a kubeconfig path
+func (r *Registry) buildDynamicClient(kubeconfigPath string) (dynamic.Interface, error) {
+	if kubeconfigPath == "" {
+		// Use default kubeconfig
+		kubeconfigPath = os.Getenv("KUBECONFIG")
+		if kubeconfigPath == "" {
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get home directory: %w", err)
+			}
+			kubeconfigPath = homeDir + "/.kube/config"
+		}
+	}
+
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidKubeconfig, err)
+	}
+
+	dynClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
+	}
+
+	return dynClient, nil
 }

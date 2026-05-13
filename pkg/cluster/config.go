@@ -48,6 +48,7 @@ type ContextConfig struct {
 	SummaryEnabled    bool `yaml:"summary-enabled"`    // enable conversation summarization
 	SummaryThreshold  int  `yaml:"summary-threshold"`   // trigger summarization when message count reaches this
 	ToolCallRetention int  `yaml:"tool-call-retention"`  // number of recent tool calls to retain in level 1 compression
+	MaxIterations     int  `yaml:"max-iterations"`      // max function call iterations per turn
 }
 
 // DefaultAppConfig returns the default configuration
@@ -68,6 +69,7 @@ func DefaultAppConfig() *AppConfig {
 			SummaryEnabled:    true,
 			SummaryThreshold:  10,
 			ToolCallRetention: 10,
+			MaxIterations:     10,
 		},
 		Session: SessionConfig{
 			StoragePath:  "~/.config/k8s-agent/sessions",

@@ -2,23 +2,34 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
-	"github.com/openai/openai-go/shared"
+	pkgshared "github.com/openai/openai-go/shared"
 	"github.com/openai/openai-go/shared/constant"
+	"k8s-agent/pkg/log"
+	sharedutil "k8s-agent/pkg/shared"
 )
 
-// OpenAISDKProvider implements Provider using the official OpenAI SDK
+// OpenAISDKProvider implements direct OpenAI SDK calls
 type OpenAISDKProvider struct {
 	client    openai.Client
 	model     string
 	maxTokens int
 }
 
+// LLMConfig holds LLM configuration
+type LLMConfig struct {
+	APIKey      string
+	Model       string
+	BaseURL     string
+	MaxTokens   int
+}
+
 // NewOpenAISDKProvider creates a new OpenAI SDK provider
-func NewOpenAISDKProvider(cfg *Config) *OpenAISDKProvider {
+func NewOpenAISDKProvider(cfg *LLMConfig) *OpenAISDKProvider {
 	baseURL := cfg.BaseURL
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
@@ -42,7 +53,7 @@ func NewOpenAISDKProvider(cfg *Config) *OpenAISDKProvider {
 }
 
 // Chat sends messages to OpenAI API and returns the response
-func (p *OpenAISDKProvider) Chat(ctx context.Context, messages []Message) (string, error) {
+func (p *OpenAISDKProvider) Chat(ctx context.Context, messages []sharedutil.Message) (string, error) {
 	openAIMessages := toSDKMessages(messages)
 
 	resp, err := p.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
@@ -55,7 +66,7 @@ func (p *OpenAISDKProvider) Chat(ctx context.Context, messages []Message) (strin
 	}
 
 	if len(resp.Choices) == 0 {
-		return "", fmt.Errorf("no response choices returned")
+		return "", fmt.Errorf("no response choices returned from OpenAI API")
 	}
 
 	content := resp.Choices[0].Message.Content
@@ -63,7 +74,7 @@ func (p *OpenAISDKProvider) Chat(ctx context.Context, messages []Message) (strin
 }
 
 // ChatWithFunctions sends messages with function definitions and returns a function call and/or text response
-func (p *OpenAISDKProvider) ChatWithFunctions(ctx context.Context, messages []Message, functions []Function) (string, *FunctionCall, error) {
+func (p *OpenAISDKProvider) ChatWithFunctions(ctx context.Context, messages []sharedutil.Message, functions []sharedutil.Function) (string, *sharedutil.FunctionCall, error) {
 	openAIMessages := toSDKMessages(messages)
 
 	// Convert our Function type to SDK format using Tools
@@ -71,13 +82,21 @@ func (p *OpenAISDKProvider) ChatWithFunctions(ctx context.Context, messages []Me
 	for i, fn := range functions {
 		sdkTools[i] = openai.ChatCompletionToolParam{
 			Type: constant.ValueOf[constant.Function](),
-			Function: shared.FunctionDefinitionParam{
+			Function: pkgshared.FunctionDefinitionParam{
 				Name:        fn.Name,
 				Description: openai.String(fn.Description),
-				Parameters:  shared.FunctionParameters(fn.Parameters),
+				Parameters:  pkgshared.FunctionParameters(fn.Parameters),
 			},
 		}
 	}
+
+	// Debug log the full request before sending
+	reqJSON, _ := json.Marshal(map[string]interface{}{
+		"model":    p.model,
+		"messages": messages,
+		"tools":    functions,
+	})
+	log.Debug("LLM request", "request", string(reqJSON))
 
 	resp, err := p.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 		Model:     p.model,
@@ -85,12 +104,16 @@ func (p *OpenAISDKProvider) ChatWithFunctions(ctx context.Context, messages []Me
 		Tools:     sdkTools,
 		MaxTokens: openai.Int(int64(p.maxTokens)),
 	})
+
 	if err != nil {
 		return "", nil, fmt.Errorf("OpenAI API call failed: %w", err)
 	}
 
+	respJSON, _ := json.Marshal(resp)
+	log.Debug("LLM response", "response", string(respJSON))
+
 	if len(resp.Choices) == 0 {
-		return "", nil, fmt.Errorf("no response choices returned")
+		return "", nil, fmt.Errorf("no response choices returned from OpenAI API")
 	}
 
 	// Check for function call in response (via ToolCalls)
@@ -99,7 +122,7 @@ func (p *OpenAISDKProvider) ChatWithFunctions(ctx context.Context, messages []Me
 		toolCall := choice.Message.ToolCalls[0]
 		// Return both text content (if any) and function call
 		textContent := choice.Message.Content
-		return textContent, &FunctionCall{
+		return textContent, &sharedutil.FunctionCall{
 			ID:        toolCall.ID,
 			Name:      toolCall.Function.Name,
 			Arguments: toolCall.Function.Arguments,
@@ -116,7 +139,7 @@ func (p *OpenAISDKProvider) Name() string {
 }
 
 // toSDKMessages converts our Message type to SDK format
-func toSDKMessages(messages []Message) []openai.ChatCompletionMessageParamUnion {
+func toSDKMessages(messages []sharedutil.Message) []openai.ChatCompletionMessageParamUnion {
 	result := make([]openai.ChatCompletionMessageParamUnion, len(messages))
 	for i, msg := range messages {
 		switch msg.Role {
