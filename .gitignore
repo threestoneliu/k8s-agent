@@ -29,3 +29,6 @@ config.bak.yaml
 .claude/
 .agents/
 skills-lock.json
+
+# Worktrees
+.worktrees/
