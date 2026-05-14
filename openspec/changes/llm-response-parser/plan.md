@@ -15,7 +15,7 @@
 **Files:**
 - Create: `pkg/llm/parser.go`
 
-- [ ] **Step 1: Create parser.go with TextPart and ResponseParser**
+- [x] **Step 1: Create parser.go with TextPart and ResponseParser**
 
 ```go
 package llm
@@ -32,7 +32,7 @@ type ResponseParser interface {
 }
 ```
 
-- [ ] **Step 2: Implement OpenAIResponseParser**
+- [x] **Step 2: Implement OpenAIResponseParser**
 
 ```go
 type OpenAIResponseParser struct{}
@@ -44,7 +44,7 @@ func (p *OpenAIResponseParser) Parse(text string) []TextPart {
 
 Run: `go build ./pkg/llm/...`
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add pkg/llm/parser.go
@@ -58,7 +58,7 @@ git commit -m "feat(llm): add ResponseParser interface and OpenAI implementation
 **Files:**
 - Modify: `pkg/llm/llm.go`
 
-- [ ] **Step 1: Add responseParser field to Service**
+- [x] **Step 1: Add responseParser field to Service**
 
 ```go
 type Service struct {
@@ -68,7 +68,7 @@ type Service struct {
 }
 ```
 
-- [ ] **Step 2: Initialize parser in NewService**
+- [x] **Step 2: Initialize parser in NewService**
 
 ```go
 func NewService(cfg *LLMConfig) *Service {
@@ -81,7 +81,7 @@ func NewService(cfg *LLMConfig) *Service {
 }
 ```
 
-- [ ] **Step 3: Add ResponseParser method**
+- [x] **Step 3: Add ResponseParser method**
 
 ```go
 func (s *Service) ResponseParser() ResponseParser {
@@ -91,7 +91,7 @@ func (s *Service) ResponseParser() ResponseParser {
 
 Run: `go build ./pkg/llm/...`
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add pkg/llm/llm.go
@@ -105,13 +105,13 @@ git commit -m "feat(llm): add ResponseParser() method to Service"
 **Files:**
 - Modify: `pkg/agent/agent.go`
 
-- [ ] **Step 1: Find and remove textPart and parseThinkTags**
+- [x] **Step 1: Find and remove textPart and parseThinkTags**
 
 Remove from agent.go:
 - `textPart` struct definition
 - `parseThinkTags` function
 
-- [ ] **Step 2: Update call site**
+- [x] **Step 2: Update call site**
 
 ```go
 // OLD:
@@ -123,14 +123,14 @@ parts := a.llmSvc.ResponseParser().Parse(textResp)
 
 Note: Need to update the return type handling since TextPart uses `IsThink` instead of `isThink`.
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 ```bash
 go build ./...
 go test ./...
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add pkg/agent/agent.go
@@ -141,19 +141,19 @@ git commit -m "refactor(agent): use llm.ResponseParser interface instead of loca
 
 ## Task 4: Final verification
 
-- [ ] **Step 1: Run all tests**
+- [x] **Step 1: Run all tests**
 
 ```bash
 go test ./...
 ```
 
-- [ ] **Step 2: Run build**
+- [x] **Step 2: Run build**
 
 ```bash
 go build ./...
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git commit -m "chore: final verification for llm-response-parser"
