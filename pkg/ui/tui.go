@@ -10,8 +10,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
-	"k8s-agent/pkg/session"
-	sharedutil "k8s-agent/pkg/shared"
+	"github.com/threestoneliu/k8s-agent/pkg/session"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 )
 
 // precompiled regex for markdown bold

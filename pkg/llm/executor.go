@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	k8s "k8s-agent/pkg/k8s"
-	sharedutil "k8s-agent/pkg/shared"
+	k8s "github.com/threestoneliu/k8s-agent/pkg/k8s"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 )
 
 // Executor executes K8s function calls

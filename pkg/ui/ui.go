@@ -1,6 +1,6 @@
 package ui
 
-import "k8s-agent/pkg/ipc"
+import "github.com/threestoneliu/k8s-agent/pkg/ipc"
 
 // Re-export IPC types for backward compatibility
 type Input = ipc.Input

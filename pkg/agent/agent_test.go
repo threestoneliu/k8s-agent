@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"k8s-agent/pkg/session"
-	sharedutil "k8s-agent/pkg/shared"
-	"k8s-agent/pkg/ui"
+	"github.com/threestoneliu/k8s-agent/pkg/session"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
+	"github.com/threestoneliu/k8s-agent/pkg/ui"
 )
 
 // mockStore implements session.StoreInterface for testing

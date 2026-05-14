@@ -7,8 +7,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/bubbletea"
-	"k8s-agent/pkg/session"
-	sharedutil "k8s-agent/pkg/shared"
+	"github.com/threestoneliu/k8s-agent/pkg/session"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 )
 
 // mockClusterLister implements cluster lister for testing

@@ -6,11 +6,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
-	"k8s-agent/pkg/agent"
-	"k8s-agent/pkg/cluster"
-	"k8s-agent/pkg/llm"
-	"k8s-agent/pkg/session"
-	"k8s-agent/pkg/ui"
+	"github.com/threestoneliu/k8s-agent/pkg/agent"
+	"github.com/threestoneliu/k8s-agent/pkg/cluster"
+	"github.com/threestoneliu/k8s-agent/pkg/llm"
+	"github.com/threestoneliu/k8s-agent/pkg/session"
+	"github.com/threestoneliu/k8s-agent/pkg/ui"
 )
 
 func (rc *RootCommand) newChatCommand() *cobra.Command {

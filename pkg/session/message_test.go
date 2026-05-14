@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	sharedutil "k8s-agent/pkg/shared"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 )
 
 func TestMessage_Roles(t *testing.T) {

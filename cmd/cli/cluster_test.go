@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s-agent/pkg/cluster"
+	"github.com/threestoneliu/k8s-agent/pkg/cluster"
 )
 
 func TestClusterListCommand(t *testing.T) {

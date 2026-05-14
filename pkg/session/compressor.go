@@ -3,7 +3,7 @@ package session
 import (
 	"fmt"
 
-	sharedutil "k8s-agent/pkg/shared"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 )
 
 // ShouldCompress checks if interactions need compression

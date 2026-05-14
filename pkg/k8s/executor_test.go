@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"k8s-agent/pkg/cluster"
+	"github.com/threestoneliu/k8s-agent/pkg/cluster"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )

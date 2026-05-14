@@ -72,7 +72,7 @@ func DefaultAppConfig() *AppConfig {
 			MaxIterations:     10,
 		},
 		Session: SessionConfig{
-			StoragePath:  "~/.config/k8s-agent/sessions",
+			StoragePath:  "~/.config/github.com/threestoneliu/k8s-agent/sessions",
 			MaxCacheSize: 100,
 			MaxSessions:  10,
 		},

@@ -2,8 +2,8 @@ package session
 
 import (
 	"fmt"
-	"k8s-agent/pkg/cluster"
-	sharedutil "k8s-agent/pkg/shared"
+	"github.com/threestoneliu/k8s-agent/pkg/cluster"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 	"strings"
 )
 

@@ -1,4 +1,4 @@
-module k8s-agent
+module github.com/threestoneliu/k8s-agent
 
 go 1.26.0
 

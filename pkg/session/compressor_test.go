@@ -3,7 +3,7 @@ package session
 import (
 	"testing"
 
-	sharedutil "k8s-agent/pkg/shared"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 )
 
 func TestShouldCompress(t *testing.T) {

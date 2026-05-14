@@ -3,7 +3,7 @@ package llm
 import (
 	"context"
 
-	sharedutil "k8s-agent/pkg/shared"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 )
 
 // Service provides LLM operations with direct OpenAI calls

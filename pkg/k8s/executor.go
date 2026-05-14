@@ -11,8 +11,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
-	"k8s-agent/pkg/cluster"
-	"k8s-agent/pkg/log"
+	"github.com/threestoneliu/k8s-agent/pkg/cluster"
+	"github.com/threestoneliu/k8s-agent/pkg/log"
 )
 
 // ClusterRegistryInterface defines the interface for cluster registry operations needed by Executor

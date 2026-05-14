@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"k8s-agent/pkg/cluster"
-	sharedutil "k8s-agent/pkg/shared"
+	"github.com/threestoneliu/k8s-agent/pkg/cluster"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 )
 
 // TestLevel1Compress_SingleCompleteInteraction verifies that a single complete interaction is handled correctly

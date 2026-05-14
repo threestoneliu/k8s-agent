@@ -4,7 +4,7 @@ import (
 	"errors"
 	"time"
 
-	sharedutil "k8s-agent/pkg/shared"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 )
 
 // Role constants (OpenAI standard - using shared constants)

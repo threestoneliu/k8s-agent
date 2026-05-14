@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	sharedutil "k8s-agent/pkg/shared"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 )
 
 func TestExecutor_ExecuteFunctionCall_NilCall(t *testing.T) {

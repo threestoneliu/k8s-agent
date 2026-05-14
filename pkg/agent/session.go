@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"k8s-agent/pkg/session"
-	sharedutil "k8s-agent/pkg/shared"
+	"github.com/threestoneliu/k8s-agent/pkg/session"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 )
 
 // NewMessageWithType creates a session message with explicit MessageType

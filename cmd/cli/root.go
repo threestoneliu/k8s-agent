@@ -7,11 +7,11 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"k8s-agent/pkg/cluster"
-	"k8s-agent/pkg/k8s"
-	"k8s-agent/pkg/llm"
-	"k8s-agent/pkg/log"
-	"k8s-agent/pkg/session"
+	"github.com/threestoneliu/k8s-agent/pkg/cluster"
+	"github.com/threestoneliu/k8s-agent/pkg/k8s"
+	"github.com/threestoneliu/k8s-agent/pkg/llm"
+	"github.com/threestoneliu/k8s-agent/pkg/log"
+	"github.com/threestoneliu/k8s-agent/pkg/session"
 )
 
 // RootCommand is the root command structure
@@ -138,7 +138,7 @@ func NewRootCommand() *cobra.Command {
 	}
 
 	// Add --config flag
-	rootCmd.PersistentFlags().StringP("config", "c", "", "Path to config file (default: ~/.config/k8s-agent/config.yaml)")
+	rootCmd.PersistentFlags().StringP("config", "c", "", "Path to config file (default: ~/.config/github.com/threestoneliu/k8s-agent/config.yaml)")
 
 	// Store viper binding for --config flag
 	viper.BindPFlag("config", rootCmd.PersistentFlags().Lookup("config"))

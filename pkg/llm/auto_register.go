@@ -3,8 +3,8 @@ package llm
 import (
 	"fmt"
 
-	k8s "k8s-agent/pkg/k8s"
-	sharedutil "k8s-agent/pkg/shared"
+	k8s "github.com/threestoneliu/k8s-agent/pkg/k8s"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 )
 
 // Package-level executor reference

@@ -9,8 +9,8 @@ import (
 	"github.com/openai/openai-go/option"
 	pkgshared "github.com/openai/openai-go/shared"
 	"github.com/openai/openai-go/shared/constant"
-	"k8s-agent/pkg/log"
-	sharedutil "k8s-agent/pkg/shared"
+	"github.com/threestoneliu/k8s-agent/pkg/log"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 )
 
 // OpenAISDKProvider implements direct OpenAI SDK calls

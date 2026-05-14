@@ -1,7 +1,7 @@
 package llm
 
 import (
-	sharedutil "k8s-agent/pkg/shared"
+	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 )
 
 // FunctionHandler is the function handler type
