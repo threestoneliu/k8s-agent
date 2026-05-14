@@ -15,52 +15,6 @@ import (
 	sharedutil "k8s-agent/pkg/shared"
 )
 
-// parseThinkTags parses text containing <think>xxx</think> tags
-// textPart represents a part of text with its type (text or think)
-type textPart struct {
-	isThink bool
-	content string
-}
-
-// parseThinkTags parses text and returns parts in original order
-func parseThinkTags(text string) []textPart {
-	parts := []textPart{}
-	thinkStart := "<think>"
-	thinkEnd := "</think>"
-
-	for {
-		startIdx := strings.Index(text, thinkStart)
-		if startIdx == -1 {
-			// No more think tags
-			if len(text) > 0 {
-				parts = append(parts, textPart{isThink: false, content: text})
-			}
-			break
-		}
-
-		// Add text before think tag
-		if startIdx > 0 {
-			parts = append(parts, textPart{isThink: false, content: text[:startIdx]})
-		}
-
-		// Find end of think tag
-		endIdx := strings.Index(text[startIdx:], thinkEnd)
-		if endIdx == -1 {
-			// Unclosed think tag, treat rest as text
-			parts = append(parts, textPart{isThink: false, content: text[startIdx:]})
-			break
-		}
-
-		endIdx += startIdx + len(thinkEnd)
-		thinkContent := text[startIdx+len(thinkStart) : endIdx-len(thinkEnd)]
-		parts = append(parts, textPart{isThink: true, content: strings.TrimSpace(thinkContent)})
-
-		// Move to after this think tag
-		text = text[endIdx:]
-	}
-
-	return parts
-}
 
 // clusterLister lists available clusters
 type clusterLister interface {
@@ -298,14 +252,14 @@ func (a *Agent) processWithOutput(state *State, outputChan chan<- ipc.Output) {
 		// Send text response if any
 		if textResp != "" {
 			// Parse think tags and send parts in original order
-			parts := parseThinkTags(textResp)
+			parts := a.llmSvc.ResponseParser().Parse(textResp)
 
 			for _, part := range parts {
-				content := strings.TrimSpace(part.content)
+				content := strings.TrimSpace(part.Content)
 				if len(content) == 0 {
 					continue
 				}
-				if part.isThink {
+				if part.IsThink {
 					outputChan <- ipc.Output{
 						Type:    ipc.OutputTypeThink,
 						Content: content,
