@@ -19,7 +19,7 @@ type OpenAIResponseParser struct{}
 func (p *OpenAIResponseParser) Parse(text string) []TextPart {
 	parts := []TextPart{}
 	thinkStart := "<think>"
-	thinkEnd := ""
+	thinkEnd := "</think>"
 
 	for {
 		startIdx := strings.Index(text, thinkStart)
