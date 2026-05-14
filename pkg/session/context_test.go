@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"testing"
 
 	"k8s-agent/pkg/cluster"
@@ -233,4 +234,55 @@ func TestFindCompleteInteractions_Multiple(t *testing.T) {
 	if interactions[1].UserIndex != 4 {
 		t.Errorf("expected second interaction UserIndex 4, got %d", interactions[1].UserIndex)
 	}
+}
+
+// TestBuildContextMessages_NeedsSummary verifies that Level 3 compression signals needsSummary=true
+func TestBuildContextMessages_NeedsSummary(t *testing.T) {
+	config := cluster.ContextConfig{
+		MaxMessages:      5,
+		MaxTokens:       100, // Very low to force Level 3
+		SummaryEnabled:  true,
+		ToolCallRetention: 3,
+	}
+	cm := NewContextManager(config)
+
+	// Create messages that will trigger Level 3 (20 messages with max 5)
+	// Need complete interactions (user + tool call + tool result + summary) so compression works
+	messages := make([]*Message, 20)
+	for i := range messages {
+		idx := i % 4
+		var role string
+		var content string
+		switch idx {
+		case 0:
+			role = sharedutil.RoleUser
+			content = fmt.Sprintf("User query number %d with lots of additional content to make token count high", i)
+		case 1:
+			role = sharedutil.RoleAssistant
+			content = fmt.Sprintf("[Function Call: k8s_get_%d]", i)
+		case 2:
+			role = sharedutil.RoleAssistant
+			content = fmt.Sprintf("[Tool:result_%d]", i)
+		case 3:
+			role = sharedutil.RoleAssistant
+			content = fmt.Sprintf("Summary for query %d with additional content to increase token count", i)
+		}
+		messages[i] = &Message{
+			Message: sharedutil.Message{
+				Role:    role,
+				Content: content,
+			},
+		}
+	}
+
+	llmMessages, needsSummary, rawForSummary := cm.BuildContextMessages("system prompt", messages, "")
+
+	// Verify needsSummary is true when Level 3 is triggered
+	if !needsSummary {
+		t.Error("Expected needsSummary=true for Level 3 compression")
+	}
+	if len(rawForSummary) == 0 {
+		t.Error("Expected rawForSummary to contain messages for summarization")
+	}
+	_ = llmMessages // Used in actual implementation
 }

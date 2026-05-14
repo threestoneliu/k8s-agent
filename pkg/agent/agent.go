@@ -274,7 +274,11 @@ func (a *Agent) processWithOutput(state *State, outputChan chan<- ipc.Output) {
 
 	// Apply context compression if needed
 	if a.ctxManager != nil && len(a.llmMessages) > a.ctxManager.MessageCount() {
-		a.llmMessages = a.ctxManager.CompressMessages(a.llmMessages)
+		systemPrompt := BuildSystemPrompt(state.ClusterName)
+		llmMsgs, err := a.BuildContextMessagesWithSummary(systemPrompt, a.messages)
+		if err == nil {
+			a.llmMessages = llmMsgs
+		}
 	}
 
 	log.Info("agent process started", "cluster", state.ClusterName, "messageCount", len(a.llmMessages))
@@ -666,6 +670,100 @@ func formatConfigFlat(data map[string]interface{}, prefix string) string {
 		}
 	}
 	return result
+}
+
+// generateLLMSummary generates a conversational summary using LLM
+func (a *Agent) generateLLMSummary(messages []*session.Message) (string, error) {
+	if a.llmSvc == nil {
+		return a.fallbackSummary(messages), nil
+	}
+
+	prompt := a.buildSummaryPrompt(messages)
+	resp, err := a.llmSvc.Chat(context.Background(), []sharedutil.Message{
+		{Role: "user", Content: prompt},
+	})
+	if err != nil {
+		log.Warn("LLM summary failed, using fallback", "error", err)
+		return a.fallbackSummary(messages), nil
+	}
+	return resp, nil
+}
+
+// buildSummaryPrompt constructs the prompt for LLM summarization
+func (a *Agent) buildSummaryPrompt(messages []*session.Message) string {
+	var sb strings.Builder
+	sb.WriteString("请用简洁的自然语言总结以下会话，风格如同助手在回顾对话。")
+	sb.WriteString("重点描述：涉及的集群、操作类型、资源类型、命名空间、是否有危险操作。\n\n")
+
+	for _, m := range messages {
+		role := "用户"
+		if m.Role == session.RoleAssistant {
+			role = "助手"
+		}
+		sb.WriteString(fmt.Sprintf("%s: %s\n", role, m.Content))
+	}
+
+	sb.WriteString("\n请生成一段简洁的对话式摘要（中文，100字以内）。")
+	return sb.String()
+}
+
+// BuildContextMessagesWithSummary builds context messages with LLM summary if needed
+func (a *Agent) BuildContextMessagesWithSummary(systemPrompt string, messages []*session.Message) ([]sharedutil.Message, error) {
+	if a.ctxManager == nil {
+		return nil, fmt.Errorf("context manager not available")
+	}
+
+	ctxMgr := a.ctxManager
+	llmMessages, needsSummary, rawForSummary := ctxMgr.BuildContextMessages(systemPrompt, messages, "")
+
+	if !needsSummary {
+		return llmMessages, nil
+	}
+
+	// Generate LLM summary
+	summary, err := a.generateLLMSummary(rawForSummary)
+	if err != nil {
+		return nil, err
+	}
+
+	// Rebuild with summary - create new messages with summary included
+	result := []sharedutil.Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "system", Content: "[Previous conversation summary]: " + summary},
+	}
+
+	// Keep recent messages as "recent context"
+	windowSize := ctxMgr.GetConfig().ToolCallRetention
+	if windowSize <= 0 {
+		windowSize = 5
+	}
+	startIdx := len(messages) - windowSize
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	result = append(result, sharedutil.Message{
+		Role:    "system",
+		Content: fmt.Sprintf("[%d earlier messages have been summarized]", startIdx),
+	})
+
+	for i := startIdx; i < len(messages); i++ {
+		result = append(result, sharedutil.Message{
+			Role:    string(messages[i].Role),
+			Content: messages[i].Content,
+		})
+	}
+
+	return result, nil
+}
+
+// fallbackSummary uses the old lightweight keyword-based summary
+func (a *Agent) fallbackSummary(messages []*session.Message) string {
+	ctxMgr := a.ctxManager
+	if ctxMgr == nil {
+		return "会话摘要不可用"
+	}
+	return ctxMgr.GenerateFallbackSummary(messages)
 }
 
 // yamlMarshalIndent marshals v to YAML with proper indentation

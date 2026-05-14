@@ -70,7 +70,7 @@ func (cm *ContextManager) BuildContextMessages(
 	systemPrompt string,
 	messages []*Message,
 	summaryPrompt string,
-) []sharedutil.Message {
+) (llmMessages []sharedutil.Message, needsSummary bool, rawForSummary []*Message) {
 	result := []sharedutil.Message{
 		{Role: "system", Content: systemPrompt},
 	}
@@ -86,7 +86,7 @@ func (cm *ContextManager) BuildContextMessages(
 					Content: m.Content,
 				})
 			}
-			return result
+			return result, false, nil
 		}
 	}
 
@@ -121,7 +121,7 @@ func (cm *ContextManager) BuildContextMessages(
 					Content: m.Content,
 				})
 			}
-			return result
+			return result, false, nil
 		}
 	}
 
@@ -148,7 +148,7 @@ func (cm *ContextManager) BuildContextMessages(
 					Content: m.Content,
 				})
 			}
-			return result
+			return result, false, nil
 		}
 	}
 
@@ -187,6 +187,7 @@ func (cm *ContextManager) BuildContextMessages(
 
 		// Final token check
 		result = cm.trimByTokenLimitWithPlaceholder(result)
+		return result, true, messages
 	} else {
 		// No summarization, just do final token trim
 		if droppedLevel2 > 0 {
@@ -204,7 +205,7 @@ func (cm *ContextManager) BuildContextMessages(
 		result = cm.trimByTokenLimitWithPlaceholder(result)
 	}
 
-	return result
+	return result, false, nil
 }
 
 // level1Compress drops old tool call results but keeps recent N complete interactions.
@@ -581,6 +582,16 @@ func (cm *ContextManager) MessageCount() int {
 // IsSummaryEnabled returns whether summarization is enabled
 func (cm *ContextManager) IsSummaryEnabled() bool {
 	return cm.config.SummaryEnabled
+}
+
+// GenerateFallbackSummary provides the old lightweight summary as fallback
+func (cm *ContextManager) GenerateFallbackSummary(messages []*Message) string {
+	return cm.generateSummary(messages, "")
+}
+
+// GetConfig returns the context manager configuration
+func (cm *ContextManager) GetConfig() cluster.ContextConfig {
+	return cm.config
 }
 
 // CompressMessages compresses LLM messages to fit within context limits
