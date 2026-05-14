@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"k8s-agent/cmd/cli"
+	"github.com/threestoneliu/k8s-agent/cmd/cli"
 )
 
 func main() {
