@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
 	"github.com/threestoneliu/k8s-agent/pkg/cluster"
 	"github.com/threestoneliu/k8s-agent/pkg/log"
@@ -20,6 +21,7 @@ type ClusterRegistryInterface interface {
 	GetCluster(name string) (kubernetes.Interface, error)
 	GetClusterContext(ctx context.Context, name string) (kubernetes.Interface, error)
 	GetDynamicCluster(name string) (dynamic.Interface, error)
+	GetRESTClient(name string) (*rest.RESTClient, error)
 	ListClusterNames() []string
 	GetResourceCache() *cluster.ResourceCache
 }
@@ -155,70 +157,10 @@ func (e *Executor) normalizeResource(resource string) string {
 	return lowerResource
 }
 
-// ListResourcesWithSelectors lists Kubernetes resources with label and field selectors using dynamic client
+// ListResourcesWithSelectors lists Kubernetes resources with label and field selectors, returning table format
 func (e *Executor) ListResourcesWithSelectors(clusterName, resource, namespace, labelSelector, fieldSelector string) (*ExecutionResult, error) {
-	log.Debug("ListResourcesWithSelectors: START", "cluster", clusterName, "resource", resource)
-
-	// Normalize resource name (singular to plural)
-	resource = e.normalizeResource(resource)
-
-	dynClient, err := e.clusterRegistry.GetDynamicCluster(clusterName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get cluster %s: %w", clusterName, err)
-	}
-
-	k8sClient, err := e.clusterRegistry.GetCluster(clusterName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get cluster %s: %w", clusterName, err)
-	}
-
-	if err := e.getResourceCache().LazyRefresh(clusterName, k8sClient); err != nil {
-		return &ExecutionResult{Success: false, Output: fmt.Sprintf("failed to refresh resource cache: %v", err)}, nil
-	}
-
-	cache := e.getResourceCache()
-	gvr, ok := cache.GetGVR(clusterName, resource)
-	if !ok {
-		log.Warn("GetGVR failed for resource %s", resource)
-		return &ExecutionResult{Success: false, Output: fmt.Sprintf("unsupported resource type: %s", resource)}, nil
-	}
-	log.Debug("GVR details: Group=%s, Version=%s, Resource=%s", gvr.Group, gvr.Version, gvr.Resource)
-
-	isNs := cache.IsNamespaced(clusterName, resource)
-	log.Debug("ListResourcesWithSelectors: gvr=%v, isNamespaced=%v", gvr, isNs)
-
-	listOptions := metav1.ListOptions{
-		LabelSelector: labelSelector,
-		FieldSelector: fieldSelector,
-	}
-
-	ctx := context.Background()
-	var unstructuredList *unstructured.UnstructuredList
-
-	if isNs {
-		if namespace == "" {
-			namespace = "default"
-		}
-		log.Debug("Calling namespaced resource API", "path", fmt.Sprintf("/apis/%s/namespaces/%s/%s", gvr.Group, namespace, gvr.Resource))
-		unstructuredList, err = dynClient.Resource(gvr).Namespace(namespace).List(ctx, listOptions)
-	} else {
-		log.Debug("Calling cluster-scoped resource API", "path", fmt.Sprintf("/apis/%s/%s", gvr.Group, gvr.Resource))
-		unstructuredList, err = dynClient.Resource(gvr).List(ctx, listOptions)
-	}
-
-	if err != nil {
-		log.Error("ListResourcesWithSelectors: dynamic client call failed", "error", err, "gvr", fmt.Sprintf("%+v", gvr))
-		return &ExecutionResult{Success: false, Output: err.Error()}, nil
-	}
-
-	// Return JSON serialized data
-	count := len(unstructuredList.Items)
-	data := map[string]any{
-		"count":     count,
-		"resources": unstructuredList.Items,
-	}
-	jsonData, _ := json.MarshalIndent(data, "", "  ")
-	return &ExecutionResult{Success: true, Output: string(jsonData), Resource: resource, Verb: "list"}, nil
+	// Delegate to ListResourcesAsTable for table output
+	return e.ListResourcesAsTable(clusterName, resource, namespace, labelSelector, fieldSelector)
 }
 
 // GetResourceWithSelectors gets a specific Kubernetes resource with label and field selectors using dynamic client
@@ -290,4 +232,108 @@ func (e *Executor) GetAPIResources(clusterName string) (*ExecutionResult, error)
 	apiResources := e.getResourceCache().GetAPIResources(clusterName)
 	output := fmt.Sprintf("Found %d API resources", len(apiResources))
 	return &ExecutionResult{Success: true, Output: output, Resource: "apiresources", Verb: "get"}, nil
+}
+
+// ListResourcesAsTable lists Kubernetes resources and returns a formatted table using RESTClient with Table accept header
+func (e *Executor) ListResourcesAsTable(clusterName, resource, namespace, labelSelector, fieldSelector string) (*ExecutionResult, error) {
+	log.Debug("ListResourcesAsTable: START", "cluster", clusterName, "resource", resource)
+
+	// Normalize resource name (singular to plural)
+	resource = e.normalizeResource(resource)
+
+	k8sClient, err := e.clusterRegistry.GetCluster(clusterName)
+	if err != nil {
+		return &ExecutionResult{Success: false, Output: fmt.Sprintf("failed to get cluster %s: %v", clusterName, err)}, nil
+	}
+
+	if err := e.getResourceCache().LazyRefresh(clusterName, k8sClient); err != nil {
+		return &ExecutionResult{Success: false, Output: fmt.Sprintf("failed to refresh resource cache: %v", err)}, nil
+	}
+
+	cache := e.getResourceCache()
+	gvr, ok := cache.GetGVR(clusterName, resource)
+	if !ok {
+		log.Warn("GetGVR failed for resource %s", resource)
+		return &ExecutionResult{Success: false, Output: fmt.Sprintf("unsupported resource type: %s", resource)}, nil
+	}
+	log.Debug("GVR details: Group=%s, Version=%s, Resource=%s", gvr.Group, gvr.Version, gvr.Resource)
+
+	isNs := cache.IsNamespaced(clusterName, resource)
+	log.Debug("ListResourcesAsTable: gvr=%v, isNamespaced=%v", gvr, isNs)
+
+	restClient, err := e.clusterRegistry.GetRESTClient(clusterName)
+	if err != nil {
+		return &ExecutionResult{Success: false, Output: fmt.Sprintf("failed to get REST client: %v", err)}, nil
+	}
+
+	// Build the request path
+	var path string
+	if isNs {
+		if namespace == "" {
+			namespace = "default"
+		}
+		if gvr.Group == "" {
+			path = fmt.Sprintf("/api/%s/namespaces/%s/%s", gvr.Version, namespace, gvr.Resource)
+		} else {
+			path = fmt.Sprintf("/apis/%s/%s/namespaces/%s/%s", gvr.Group, gvr.Version, namespace, gvr.Resource)
+		}
+	} else {
+		if gvr.Group == "" {
+			path = fmt.Sprintf("/api/%s/%s", gvr.Version, gvr.Resource)
+		} else {
+			path = fmt.Sprintf("/apis/%s/%s/%s", gvr.Group, gvr.Version, gvr.Resource)
+		}
+	}
+
+	log.Debug("ListResourcesAsTable: path=%s", path)
+
+	// Execute request with Table accept header
+	table := &metav1.Table{}
+	err = restClient.Get().
+		AbsPath(path).
+		SetHeader("Accept", "application/json;as=Table;v=v1;g=meta.k8s.io").
+		Param("labelSelector", labelSelector).
+		Param("fieldSelector", fieldSelector).
+		Do(context.Background()).
+		Into(table)
+
+	if err != nil {
+		log.Error("ListResourcesAsTable: REST client call failed", "error", err, "path", path)
+		return &ExecutionResult{Success: false, Output: err.Error()}, nil
+	}
+
+	// Format the table output similar to kubectl get
+	output := formatTable(table)
+	return &ExecutionResult{Success: true, Output: output, Resource: resource, Verb: "list"}, nil
+}
+
+// formatTable formats a metav1.Table into a kubectl-style string
+func formatTable(table *metav1.Table) string {
+	if table == nil {
+		return ""
+	}
+
+	var sb strings.Builder
+
+	// Print column headers
+	if len(table.ColumnDefinitions) > 0 {
+		headers := make([]string, len(table.ColumnDefinitions))
+		for i, col := range table.ColumnDefinitions {
+			headers[i] = col.Name
+		}
+		sb.WriteString(strings.Join(headers, " "))
+		sb.WriteString("\n")
+	}
+
+	// Print rows
+	for _, row := range table.Rows {
+		cells := make([]string, len(row.Cells))
+		for i, cell := range row.Cells {
+			cells[i] = fmt.Sprintf("%v", cell)
+		}
+		sb.WriteString(strings.Join(cells, " "))
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
 }

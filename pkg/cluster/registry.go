@@ -10,6 +10,7 @@ import (
 
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -34,6 +35,7 @@ type Registry struct {
 	clusters       map[string]*ClusterConfig
 	clients        map[string]kubernetes.Interface
 	dynamic        map[string]dynamic.Interface
+	restClients    map[string]*rest.RESTClient
 	resourceCache  *ResourceCache
 }
 
@@ -53,6 +55,7 @@ func NewRegistry(opts ...RegistryOption) *Registry {
 		clusters:      make(map[string]*ClusterConfig),
 		clients:       make(map[string]kubernetes.Interface),
 		dynamic:       make(map[string]dynamic.Interface),
+		restClients:   make(map[string]*rest.RESTClient),
 		resourceCache: NewResourceCache(5 * time.Minute),
 	}
 
@@ -138,6 +141,39 @@ func (r *Registry) GetDynamicCluster(name string) (dynamic.Interface, error) {
 	return dynClient, nil
 }
 
+// GetRESTClient returns a REST client for a given cluster name
+func (r *Registry) GetRESTClient(name string) (*rest.RESTClient, error) {
+	if name == "" {
+		return nil, ErrClusterNotFound
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	cfg, ok := r.clusters[name]
+	if !ok {
+		return nil, ErrClusterNotFound
+	}
+
+	restClient, ok := r.restClients[name]
+	if !ok {
+		// Lazy load the REST client
+		restConfig, err := r.buildRESTConfig(cfg.Kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build REST config: %w", err)
+		}
+
+		restClient, err = rest.RESTClientFor(restConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create REST client: %w", err)
+		}
+		r.restClients[name] = restClient
+		return restClient, nil
+	}
+
+	return restClient, nil
+}
+
 // ListClusterNames returns all configured cluster names
 func (r *Registry) ListClusterNames() []string {
 	r.mu.RLock()
@@ -207,6 +243,8 @@ func (r *Registry) RemoveCluster(name string) error {
 
 	delete(r.clusters, name)
 	delete(r.clients, name)
+	delete(r.dynamic, name)
+	delete(r.restClients, name)
 
 	// Persist to store if available
 	if r.store != nil {
@@ -291,4 +329,26 @@ func (r *Registry) buildDynamicClient(kubeconfigPath string) (dynamic.Interface,
 	}
 
 	return dynClient, nil
+}
+
+// buildRESTConfig builds a REST config from a kubeconfig path
+func (r *Registry) buildRESTConfig(kubeconfigPath string) (*rest.Config, error) {
+	if kubeconfigPath == "" {
+		// Use default kubeconfig
+		kubeconfigPath = os.Getenv("KUBECONFIG")
+		if kubeconfigPath == "" {
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get home directory: %w", err)
+			}
+			kubeconfigPath = homeDir + "/.kube/config"
+		}
+	}
+
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidKubeconfig, err)
+	}
+
+	return config, nil
 }
