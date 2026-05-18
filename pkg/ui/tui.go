@@ -209,6 +209,9 @@ type tuiModel struct {
 	clusterCtx    string
 	err           error
 	height        int
+	history       []string // stores input history
+	historyIndex  int      // current browsing position, -1 means not browsing history
+	tempInput     string   // saves current input when browsing history
 }
 
 func (m *tuiModel) Init() tea.Cmd {
