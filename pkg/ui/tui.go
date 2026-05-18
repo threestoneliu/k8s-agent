@@ -1,7 +1,10 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -72,6 +75,52 @@ const customMarkdownStyle = `{
     "block_prefix": ". "
   }
 }`
+
+// historyFile is the path to the input history file
+const historyFile = "~/.config/k8s-agent/history/history.json"
+
+// expandPath expands ~ to the user's home directory
+func expandPath(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
+// loadHistory loads input history from the history file
+func loadHistory() ([]string, error) {
+	path := expandPath(historyFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return []string{}, err
+	}
+	var history []string
+	if err := json.Unmarshal(data, &history); err != nil {
+		return []string{}, nil
+	}
+	return history, nil
+}
+
+// saveHistory saves input history to the history file
+func saveHistory(history []string) error {
+	path := expandPath(historyFile)
+	// Ensure directory exists
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	data, err := json.Marshal(history)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
 
 func init() {
 	// Initialize markdown renderer with custom style for proper heading rendering
@@ -164,6 +213,7 @@ func (t *TUI) Close() {
 
 // newModel creates the Bubble Tea model
 func (t *TUI) newModel(inputChan chan<- Input, outputChan <-chan Output) tea.Model {
+	history, _ := loadHistory()
 	m := &tuiModel{
 		tui:           t,
 		inputChan:     inputChan,
@@ -177,6 +227,7 @@ func (t *TUI) newModel(inputChan chan<- Input, outputChan <-chan Output) tea.Mod
 		clusterCtx:    t.clusterCtx,
 		err:           nil,
 		height:        0,
+		history:       history,
 	}
 	return m
 }
