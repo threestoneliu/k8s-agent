@@ -333,6 +333,14 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 
+			// Handle cluster switch command - reset history browsing state
+			if strings.HasPrefix(userInput, "/cluster") {
+				m.textinput.Reset()
+				m.historyIndex = -1
+				cmds = append(cmds, m.readOutputChan())
+				return m, tea.Batch(cmds...)
+			}
+
 			// Add user message
 			m.messages = append(m.messages, session.Message{
 				Message: sharedutil.Message{
