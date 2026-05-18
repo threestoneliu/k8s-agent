@@ -342,6 +342,38 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.readOutputChan())
 			return m, tea.Batch(cmds...)
 
+		case tea.KeyUp:
+			// Navigate history up (older entries)
+			if len(m.history) > 0 {
+				if m.historyIndex == -1 {
+					// First time browsing history - save current input
+					m.tempInput = m.textinput.Value()
+				}
+				// Move to older history entry
+				if m.historyIndex < len(m.history)-1 {
+					m.historyIndex++
+					m.textinput.SetValue(m.history[len(m.history)-1-m.historyIndex])
+				}
+			}
+			cmds = append(cmds, m.readOutputChan())
+			return m, tea.Batch(cmds...)
+
+		case tea.KeyDown:
+			// Navigate history down (newer entries)
+			if m.historyIndex != -1 {
+				if m.historyIndex == 0 {
+					// At the newest, restore tempInput
+					m.textinput.SetValue(m.tempInput)
+					m.historyIndex = -1
+				} else {
+					// Move to newer history entry
+					m.historyIndex--
+					m.textinput.SetValue(m.history[len(m.history)-1-m.historyIndex])
+				}
+			}
+			cmds = append(cmds, m.readOutputChan())
+			return m, tea.Batch(cmds...)
+
 		default:
 			// Check if this looks like a mouse sequence (e.g., [<65;24;33M)
 			// Mouse sequences typically start with [< followed by numbers and M
