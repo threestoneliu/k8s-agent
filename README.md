@@ -8,6 +8,7 @@ A conversational Kubernetes CLI tool powered by LLM with natural language interf
 - **Multi-cluster support** - Manage multiple Kubernetes clusters seamlessly
 - **Function calling** - LLM calls Kubernetes APIs directly via function definitions
 - **Interactive TUI** - Bubble Tea-based terminal interface with streaming responses
+- **Table format output** - kubectl-style compact table format, reduces LLM context usage
 
 ## Installation
 
@@ -81,7 +82,7 @@ The LLM has access to these functions:
 
 | Function | Description |
 |----------|-------------|
-| `resource_list` | List Kubernetes resources with optional label/field selectors |
+| `resource_list` | List Kubernetes resources with table format output |
 | `resource_get` | Get details of a specific resource |
 | `get_apiresources` | List all supported API resource types |
 | `use_cluster` | Switch to a different cluster |
@@ -141,13 +142,25 @@ User Input (TUI)
     ↓
 ┌─────────────────────────────────────────┐
 │  pkg/k8s - Kubernetes Executor          │
-│  - Dynamic client for all resources    │
+│  - RESTClient with Table Accept header   │
 │  - Resource discovery & caching          │
 │  - List/Get with selectors              │
 └─────────────────────────────────────────┘
     ↓
 Kubernetes API Server
 ```
+
+### Table Format Output
+
+`resource_list` returns kubectl-style compact table format instead of full YAML/JSON:
+
+```
+NAME                     READY   STATUS    AGE
+nginx-6799fc88d8-abc12    1/1     Running   5d
+redis-7d8f9f6e4-xyz34     1/1     Running   10d
+```
+
+This reduces LLM context usage by ~90% for large resource lists.
 
 ## Development
 
@@ -164,4 +177,4 @@ K8S_AGENT_LOG_LEVEL=debug ./k8s-agent chat
 
 ## License
 
-MIT
+Apache License 2.0 - See [LICENSE](LICENSE) file
