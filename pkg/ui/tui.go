@@ -341,6 +341,17 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmds...)
 			}
 
+			// Handle clear-history command
+			if userInput == "/clear-history" {
+				m.history = []string{}
+				os.Remove(expandPath(historyFile))
+				m.textinput.Reset()
+				m.historyIndex = -1
+				m.tempInput = ""
+				cmds = append(cmds, m.readOutputChan())
+				return m, tea.Batch(cmds...)
+			}
+
 			// Add user message
 			m.messages = append(m.messages, session.Message{
 				Message: sharedutil.Message{
