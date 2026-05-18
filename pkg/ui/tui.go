@@ -318,6 +318,16 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textinput.Reset()
 			m.viewport.GotoBottom()
 
+			// Save to history if not browsing history (historyIndex == -1)
+			if m.historyIndex == -1 {
+				m.history = append(m.history, userInput)
+				// Limit history to 100 items
+				if len(m.history) > 100 {
+					m.history = m.history[1:]
+				}
+				go saveHistory(m.history)
+			}
+
 			// Handle exit/quit commands in TUI layer
 			if userInput == "/exit" || userInput == "/quit" {
 				return m, tea.Quit
