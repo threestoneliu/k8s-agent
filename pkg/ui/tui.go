@@ -77,7 +77,13 @@ const customMarkdownStyle = `{
 }`
 
 // historyFile is the path to the input history file
-const historyFile = "~/.config/k8s-agent/history/history.json"
+// Use SetHistoryFileForTesting() in tests to override
+var historyFile = "~/.config/k8s-agent/history/history.txt"
+
+// SetHistoryFileForTesting overrides the history file path (only for testing)
+func SetHistoryFileForTesting(path string) {
+	historyFile = path
+}
 
 // expandPath expands ~ to the user's home directory
 func expandPath(path string) string {
@@ -100,26 +106,80 @@ func loadHistory() ([]string, error) {
 		}
 		return []string{}, err
 	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	var history []string
-	if err := json.Unmarshal(data, &history); err != nil {
-		return []string{}, nil
+	for _, line := range lines {
+		if line != "" {
+			history = append(history, line)
+		}
 	}
 	return history, nil
 }
 
-// saveHistory saves input history to the history file
+// saveHistory saves all history entries to the file (used for migration)
 func saveHistory(history []string) error {
 	path := expandPath(historyFile)
-	// Ensure directory exists
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	data, err := json.Marshal(history)
+	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	defer f.Close()
+	for _, entry := range history {
+		if _, err := fmt.Fprintln(f, entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// appendHistory appends a single entry to the history file
+func appendHistory(entry string) error {
+	path := expandPath(historyFile)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintln(f, entry)
+	return err
+}
+
+// migrateFromJSON migrates old JSON history file to new line-delimited format
+func migrateFromJSON() error {
+	jsonPath := expandPath("~/.config/k8s-agent/history/history.json")
+
+	if _, err := os.Stat(jsonPath); err != nil {
+		// JSON file doesn't exist, no migration needed
+		return nil
+	}
+
+	// Read old JSON
+	data, err := os.ReadFile(jsonPath)
+	if err != nil {
+		return err
+	}
+
+	var history []string
+	if err := json.Unmarshal(data, &history); err != nil {
+		return err
+	}
+
+	// Write new format
+	if err := saveHistory(history); err != nil {
+		return err
+	}
+
+	// Delete old file
+	os.Remove(jsonPath)
+	return nil
 }
 
 func init() {
@@ -213,6 +273,9 @@ func (t *TUI) Close() {
 
 // newModel creates the Bubble Tea model
 func (t *TUI) newModel(inputChan chan<- Input, outputChan <-chan Output) tea.Model {
+	// Migrate old JSON file if exists
+	migrateFromJSON()
+
 	history, _ := loadHistory()
 	m := &tuiModel{
 		tui:           t,
@@ -228,6 +291,7 @@ func (t *TUI) newModel(inputChan chan<- Input, outputChan <-chan Output) tea.Mod
 		err:           nil,
 		height:        0,
 		history:       history,
+		historyIndex:  -1, // -1 means not browsing history
 	}
 	return m
 }
@@ -291,10 +355,14 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case tea.KeyMsg:
-		vp, vpCmd := m.viewport.Update(msg)
-		m.viewport = vp
-		if vpCmd != nil {
-			cmds = append(cmds, vpCmd)
+		// Only pass to viewport if NOT navigating history (up/down keys)
+		// This prevents viewport from scrolling when textinput is focused
+		if msg.Type != tea.KeyUp && msg.Type != tea.KeyDown {
+			vp, vpCmd := m.viewport.Update(msg)
+			m.viewport = vp
+			if vpCmd != nil {
+				cmds = append(cmds, vpCmd)
+			}
 		}
 
 		switch msg.Type {
@@ -318,27 +386,23 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textinput.Reset()
 			m.viewport.GotoBottom()
 
-			// Save to history if not browsing history (historyIndex == -1)
-			if m.historyIndex == -1 {
+			// Save to history first (before command handling)
+			if m.historyIndex != -1 {
+				// User was browsing history, reset index after sending
+				m.historyIndex = -1
+			}
+			if userInput != "" {
 				m.history = append(m.history, userInput)
 				// Limit history to 100 items
 				if len(m.history) > 100 {
 					m.history = m.history[1:]
 				}
-				go saveHistory(m.history)
+				go appendHistory(userInput)
 			}
 
 			// Handle exit/quit commands in TUI layer
 			if userInput == "/exit" || userInput == "/quit" {
 				return m, tea.Quit
-			}
-
-			// Handle cluster switch command - reset history browsing state
-			if strings.HasPrefix(userInput, "/cluster") {
-				m.textinput.Reset()
-				m.historyIndex = -1
-				cmds = append(cmds, m.readOutputChan())
-				return m, tea.Batch(cmds...)
 			}
 
 			// Handle clear-history command

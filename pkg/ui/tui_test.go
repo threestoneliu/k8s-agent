@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -30,6 +31,9 @@ func newTestTUI(clusters []string) (*TUI, chan Input, chan Output) {
 
 // newTestModel creates a tuiModel for testing
 func newTestModel(t *testing.T, clusters []string) (*tuiModel, chan Input, chan Output) {
+	cleanup := setupTestHistory(t)
+	t.Cleanup(cleanup)
+
 	_, inputChan, outputChan := newTestTUI(clusters)
 	tui := &TUI{
 		viewport:      viewportNew(),
@@ -75,6 +79,25 @@ func castModel(t *testing.T, m tea.Model) *tuiModel {
 		t.Fatalf("expected *tuiModel, got %T", m)
 	}
 	return tm
+}
+
+// setupTestHistory creates a temp history file and configures TUI to use it
+func setupTestHistory(t *testing.T) func() {
+	// Create temp file
+	tmpFile, err := os.CreateTemp("", "history-*.txt")
+	if err != nil {
+		t.Fatalf("failed to create temp history file: %v", err)
+	}
+	tmpFile.Close()
+
+	// Override history file path
+	SetHistoryFileForTesting(tmpFile.Name())
+
+	// Return cleanup function
+	return func() {
+		os.Remove(tmpFile.Name())
+		SetHistoryFileForTesting("~/.config/k8s-agent/history/history.txt")
+	}
 }
 
 // Test 2.1.1: User types text and presses Enter → message appears in viewport
