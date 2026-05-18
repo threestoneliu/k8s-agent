@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/threestoneliu/k8s-agent/pkg/cluster"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -42,8 +43,8 @@ func (m *MockClusterRegistry) GetDynamicCluster(name string) (dynamic.Interface,
 	return args.Get(0).(dynamic.Interface), args.Error(1)
 }
 
-func (m *MockClusterRegistry) GetRESTClient(name string) (*rest.RESTClient, error) {
-	args := m.Called(name)
+func (m *MockClusterRegistry) GetRESTClient(name string, gvr schema.GroupVersionResource) (*rest.RESTClient, error) {
+	args := m.Called(name, gvr)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

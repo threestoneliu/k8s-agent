@@ -8,8 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	k8sscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -141,33 +143,42 @@ func (r *Registry) GetDynamicCluster(name string) (dynamic.Interface, error) {
 	return dynClient, nil
 }
 
-// GetRESTClient returns a REST client for a given cluster name
-func (r *Registry) GetRESTClient(name string) (*rest.RESTClient, error) {
+// GetRESTClient returns a REST client for a given cluster name and group-version
+func (r *Registry) GetRESTClient(name string, gvr schema.GroupVersionResource) (*rest.RESTClient, error) {
 	if name == "" {
 		return nil, ErrClusterNotFound
 	}
 
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-
 	cfg, ok := r.clusters[name]
 	if !ok {
+		r.mu.RUnlock()
 		return nil, ErrClusterNotFound
 	}
-
 	restClient, ok := r.restClients[name]
+	r.mu.RUnlock()
+
 	if !ok {
 		// Lazy load the REST client
 		restConfig, err := r.buildRESTConfig(cfg.Kubeconfig)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build REST config: %w", err)
 		}
+		// Set the GroupVersion for this REST client
+		restConfig.GroupVersion = &schema.GroupVersion{
+			Group:   gvr.Group,
+			Version: gvr.Version,
+		}
+		restConfig.NegotiatedSerializer = k8sscheme.Codecs.WithoutConversion()
 
 		restClient, err = rest.RESTClientFor(restConfig)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create REST client: %w", err)
 		}
+
+		r.mu.Lock()
 		r.restClients[name] = restClient
+		r.mu.Unlock()
 		return restClient, nil
 	}
 

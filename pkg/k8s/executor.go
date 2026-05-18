@@ -8,6 +8,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -21,7 +22,7 @@ type ClusterRegistryInterface interface {
 	GetCluster(name string) (kubernetes.Interface, error)
 	GetClusterContext(ctx context.Context, name string) (kubernetes.Interface, error)
 	GetDynamicCluster(name string) (dynamic.Interface, error)
-	GetRESTClient(name string) (*rest.RESTClient, error)
+	GetRESTClient(name string, gvr schema.GroupVersionResource) (*rest.RESTClient, error)
 	ListClusterNames() []string
 	GetResourceCache() *cluster.ResourceCache
 }
@@ -261,7 +262,7 @@ func (e *Executor) ListResourcesAsTable(clusterName, resource, namespace, labelS
 	isNs := cache.IsNamespaced(clusterName, resource)
 	log.Debug("ListResourcesAsTable: gvr=%v, isNamespaced=%v", gvr, isNs)
 
-	restClient, err := e.clusterRegistry.GetRESTClient(clusterName)
+	restClient, err := e.clusterRegistry.GetRESTClient(clusterName, gvr)
 	if err != nil {
 		return &ExecutionResult{Success: false, Output: fmt.Sprintf("failed to get REST client: %v", err)}, nil
 	}

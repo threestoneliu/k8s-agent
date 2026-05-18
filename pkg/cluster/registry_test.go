@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -388,7 +389,7 @@ func TestRegistry_GetRESTClient(t *testing.T) {
 			r := NewRegistry()
 			tt.setup(r)
 
-			client, err := r.GetRESTClient(tt.clusterName)
+			client, err := r.GetRESTClient(tt.clusterName, schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"})
 			if (err != nil) != tt.wantErr {
 				t.Errorf("GetRESTClient() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -412,7 +413,7 @@ func TestRegistry_GetRESTClient_ReturnsValidRESTClient(t *testing.T) {
 		Kubeconfig: "/nonexistent/path/kubeconfig",
 	}
 
-	_, err := r.GetRESTClient("test-cluster")
+	_, err := r.GetRESTClient("test-cluster", schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"})
 	if err == nil {
 		t.Error("GetRESTClient() expected error for invalid kubeconfig")
 	}
@@ -421,7 +422,7 @@ func TestRegistry_GetRESTClient_ReturnsValidRESTClient(t *testing.T) {
 func TestRegistry_GetRESTClient_NotFound(t *testing.T) {
 	r := NewRegistry()
 
-	_, err := r.GetRESTClient("non-existent")
+	_, err := r.GetRESTClient("non-existent", schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"})
 	if !errors.Is(err, ErrClusterNotFound) {
 		t.Errorf("GetRESTClient() expected ErrClusterNotFound, got %v", err)
 	}
@@ -430,7 +431,7 @@ func TestRegistry_GetRESTClient_NotFound(t *testing.T) {
 func TestRegistry_GetRESTClient_EmptyName(t *testing.T) {
 	r := NewRegistry()
 
-	_, err := r.GetRESTClient("")
+	_, err := r.GetRESTClient("", schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"})
 	if !errors.Is(err, ErrClusterNotFound) {
 		t.Errorf("GetRESTClient() expected ErrClusterNotFound for empty name, got %v", err)
 	}
@@ -447,7 +448,7 @@ func TestRegistry_GetRESTClient_EmptyKubeconfigPath(t *testing.T) {
 
 	// This will fail if no valid kubeconfig exists at default locations
 	// but it exercises the empty kubeconfig path
-	_, err := r.GetRESTClient("empty-kubeconfig")
+	_, err := r.GetRESTClient("empty-kubeconfig", schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"})
 	// Error is expected because default kubeconfig likely doesn't exist in test env
 	if err != nil && !errors.Is(err, ErrInvalidKubeconfig) {
 		t.Logf("GetRESTClient() error (expected for test env): %v", err)
@@ -462,7 +463,7 @@ func TestRegistry_GetRESTClient_Type(t *testing.T) {
 		Kubeconfig: "/nonexistent/path/kubeconfig",
 	}
 
-	client, err := r.GetRESTClient("test-cluster")
+	client, err := r.GetRESTClient("test-cluster", schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"})
 	if err != nil {
 		// Expected error path
 		return
