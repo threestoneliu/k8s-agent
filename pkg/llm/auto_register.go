@@ -2,6 +2,7 @@ package llm
 
 import (
 	"fmt"
+	"os"
 
 	k8s "github.com/threestoneliu/k8s-agent/pkg/k8s"
 	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
@@ -17,7 +18,7 @@ func SetExecutor(e *k8s.Executor) {
 
 func init() {
 	// Register function handlers
-	fmt.Printf("DEBUG: auto_register.init() running, registering %d functions\n", 4)
+	fmt.Printf("DEBUG: auto_register.init() running, registering %d functions\n", 5)
 	RegisterFunction(FunctionDefinition{
 		Function: sharedutil.Function{
 			Name:        "resource_list",
@@ -124,6 +125,24 @@ func init() {
 		},
 		Handler: useClusterHandler,
 	})
+
+	RegisterFunction(FunctionDefinition{
+		Function: sharedutil.Function{
+			Name:        "Read",
+			Description: "Read the contents of a file from the local filesystem. Use this to read SKILL.md files when you need to follow a skill's workflow.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"file_path": map[string]interface{}{
+						"type":        "string",
+						"description": "The absolute path to the file to read",
+					},
+				},
+				"required": []string{"file_path"},
+			},
+		},
+		Handler: readFileHandler,
+	})
 }
 
 func resourceListHandler(args map[string]interface{}, clusterName string) *sharedutil.FunctionResult {
@@ -223,5 +242,25 @@ func useClusterHandler(args map[string]interface{}, clusterName string) *sharedu
 		Result:        fmt.Sprintf("Switched to cluster '%s'", targetCluster),
 		Success:       true,
 		ClusterSwitch: targetCluster,
+	}
+}
+
+func readFileHandler(args map[string]interface{}, clusterName string) *sharedutil.FunctionResult {
+	filePath := getStringArg(args, "file_path", "")
+	if filePath == "" {
+		return &sharedutil.FunctionResult{Error: "file_path is required", Success: false}
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return &sharedutil.FunctionResult{
+			Error:   fmt.Sprintf("failed to read file: %v", err),
+			Success: false,
+		}
+	}
+
+	return &sharedutil.FunctionResult{
+		Result: string(content),
+		Success: true,
 	}
 }

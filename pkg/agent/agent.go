@@ -81,7 +81,7 @@ func ReconstructLLMMessages(messages []*session.Message, clusterName string) []s
 	var llmMessages []sharedutil.Message
 
 	// Add system prompt
-	systemPrompt := BuildSystemPrompt(clusterName)
+	systemPrompt := BuildSystemPrompt(clusterName, nil)
 	llmMessages = append(llmMessages, sharedutil.Message{Role: "system", Content: systemPrompt})
 
 	for _, msg := range messages {
@@ -212,7 +212,7 @@ func formatSessionText(role string, content string) string {
 
 // processWithOutput handles LLM function calling with output to channel
 func (a *Agent) processWithOutput(state *State, outputChan chan<- ipc.Output) {
-	systemPrompt := BuildSystemPrompt(state.ClusterName)
+	systemPrompt := BuildSystemPrompt(state.ClusterName, a.fnExec)
 
 	// For new turn, initialize LLM message list with system prompt
 	// Messages from previous turns are already in a.llmMessages
@@ -228,7 +228,7 @@ func (a *Agent) processWithOutput(state *State, outputChan chan<- ipc.Output) {
 
 	// Apply context compression if needed
 	if a.ctxManager != nil && len(a.llmMessages) > a.ctxManager.MessageCount() {
-		systemPrompt := BuildSystemPrompt(state.ClusterName)
+		systemPrompt := BuildSystemPrompt(state.ClusterName, a.fnExec)
 		llmMsgs, err := a.BuildContextMessagesWithSummary(systemPrompt, a.messages)
 		if err == nil {
 			a.llmMessages = llmMsgs

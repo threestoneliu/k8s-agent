@@ -181,7 +181,7 @@ func TestNewState(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_EmptyCluster(t *testing.T) {
-	prompt := BuildSystemPrompt("")
+	prompt := BuildSystemPrompt("", nil)
 	if !strings.Contains(prompt, "default") {
 		t.Error("expected 'default' cluster in prompt")
 	}
@@ -191,14 +191,14 @@ func TestBuildSystemPrompt_EmptyCluster(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_ProdCluster(t *testing.T) {
-	prompt := BuildSystemPrompt("prod-cluster")
+	prompt := BuildSystemPrompt("prod-cluster", nil)
 	if !strings.Contains(prompt, "prod-cluster") {
 		t.Error("expected 'prod-cluster' in prompt")
 	}
 }
 
 func TestBuildSystemPrompt_ChineseContent(t *testing.T) {
-	prompt := BuildSystemPrompt("test")
+	prompt := BuildSystemPrompt("test", nil)
 	if !strings.Contains(prompt, "中文") {
 		t.Error("expected Chinese content in prompt")
 	}

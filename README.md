@@ -162,6 +162,50 @@ redis-7d8f9f6e4-xyz34     1/1     Running   10d
 
 This reduces LLM context usage by ~90% for large resource lists.
 
+## Skills
+
+k8s-agent supports Skills for standardized workflows. Skills are stored in `~/.config/k8s-agent/skills/`.
+
+### Using Skills
+
+Skills are discovered automatically through the System Prompt. When your request matches a Skill's description, the LLM will read the Skill's SKILL.md and follow its workflow.
+
+**Explicit trigger:**
+```
+> /skill k8s-inspection
+> 用巡检skill
+```
+
+**Implicit trigger:**
+```
+> 巡检一下
+> 检查集群健康
+```
+
+### Creating Custom Skills
+
+Create a directory at `~/.config/k8s-agent/skills/<skill-name>/SKILL.md`:
+
+```yaml
+---
+name: my-skill
+description: Description of when this skill applies
+license: Apache-2.0
+---
+
+# My Skill
+
+## Workflows
+
+1. Step 1: call resource_list(resource="...")
+2. Step 2: analyze results
+3. Step 3: generate output
+```
+
+### Available Skills
+
+- `k8s-inspection` - Cluster health inspection workflow (nodes → pods → events → report)
+
 ## Development
 
 ```bash

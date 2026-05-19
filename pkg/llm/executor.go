@@ -3,20 +3,52 @@ package llm
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 
 	k8s "github.com/threestoneliu/k8s-agent/pkg/k8s"
+	"github.com/threestoneliu/k8s-agent/pkg/skill"
 	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 )
 
 // Executor executes K8s function calls
 type Executor struct {
-	engine *k8s.Executor
+	engine        *k8s.Executor
+	skillRegistry *skill.Registry
 }
 
 // NewExecutor creates a new function executor
 func NewExecutor(eng *k8s.Executor) *Executor {
 	SetExecutor(eng)
-	return &Executor{engine: eng}
+
+	e := &Executor{engine: eng}
+
+	// Load skills
+	homeDir, err := os.UserHomeDir()
+	if err == nil {
+		skills, err := skill.LoadSkills(homeDir + "/.config/k8s-agent")
+		if err == nil {
+			e.skillRegistry = skill.NewRegistry()
+			for _, s := range skills {
+				e.skillRegistry.Register(s)
+			}
+		}
+	}
+
+	return e
+}
+
+// GetAvailableSkillsXML returns the <available_skills> XML block
+func (e *Executor) GetAvailableSkillsXML() string {
+	if e.skillRegistry == nil {
+		return ""
+	}
+	skills := e.skillRegistry.List()
+	return skill.AvailableSkillsXML(skills)
+}
+
+// GetProgressiveDisclosurePrompt returns the skill instruction block
+func (e *Executor) GetProgressiveDisclosurePrompt() string {
+	return skill.ProgressiveDisclosurePrompt()
 }
 
 // ExecuteConfirmedOperation executes a confirmed mutation operation
