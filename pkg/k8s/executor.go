@@ -257,10 +257,15 @@ func (e *Executor) ListResourcesAsTable(clusterName, resource, namespace, labelS
 		log.Warn("GetGVR failed for resource %s", resource)
 		return &ExecutionResult{Success: false, Output: fmt.Sprintf("unsupported resource type: %s", resource)}, nil
 	}
-	log.Debug("GVR details: Group=%s, Version=%s, Resource=%s", gvr.Group, gvr.Version, gvr.Resource)
+	groupStr := gvr.Group
+	if groupStr == "" {
+		groupStr = "(core)"
+	}
+	log.Debug("GVR details: Group=%s, Version=%s, Resource=%s", groupStr, gvr.Version, gvr.Resource)
 
 	isNs := cache.IsNamespaced(clusterName, resource)
-	log.Debug("ListResourcesAsTable: gvr=%v, isNamespaced=%v", gvr, isNs)
+	gvrStr := fmt.Sprintf("Group=%s, Version=%s, Resource=%s", groupStr, gvr.Version, gvr.Resource)
+	log.Debug("ListResourcesAsTable: gvr=%s, isNamespaced=%v", gvrStr, isNs)
 
 	restClient, err := e.clusterRegistry.GetRESTClient(clusterName, gvr)
 	if err != nil {

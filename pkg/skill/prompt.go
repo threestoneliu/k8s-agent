@@ -37,5 +37,6 @@ Before replying: scan <available_skills> <description> entries.
 - If exactly one skill clearly applies: read its SKILL.md at <location> with ` + "`Read`" + `, then follow it.
 - If multiple could apply: choose the most specific one, then read/follow it.
 - If none clearly apply: do not read any SKILL.md.
+- If you have previously read a skill's SKILL.md but context appears lost (e.g., you were in the middle of a workflow), re-read the SKILL.md to restore context before continuing.
 Constraints: never read more than one skill up front; only read after selecting.`
 }

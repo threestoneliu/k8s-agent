@@ -33,7 +33,7 @@ metadata:
 
 2. **识别资源作用域**
    - 调用 `get_apiresources()` 查看资源的 `namespaced` 属性
-   - cluster-scoped 资源：nodes, persistentvolumes, componentstatuses, namespaces, storageclasses, ingressclasses, rolebindings, clusterrolebindings 等
+   - cluster-scoped 资源：nodes, persistentvolumes, componentstatuses, namespaces, storageclasses, ingressclasses, clusterrolebindings 等
    - namespace-scoped 资源：pods, services, deployments, statefulsets, daemonsets, jobs, cronjobs, configmaps, secrets, ingresses, rolebindings 等
 
 3. **查询 Cluster-scoped 资源**

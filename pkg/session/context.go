@@ -130,8 +130,8 @@ func (cm *ContextManager) BuildContextMessages(
 			// Add placeholder if any interactions were compressed
 			if droppedLevel1 > 0 {
 				result = append(result, sharedutil.Message{
-					Role:    "system",
-					Content: fmt.Sprintf("[%d msgs + %d tool calls condensed]", droppedLevel1*3, droppedLevel1),
+					Role:    "user",
+					Content: fmt.Sprintf("[Context: %d msgs + %d tool calls were condensed. You may need to re-read a skill's SKILL.md if context is lost.]", droppedLevel1*3, droppedLevel1),
 				})
 			}
 			// Use compressed messages if available, otherwise use original messages
@@ -166,8 +166,8 @@ func (cm *ContextManager) BuildContextMessages(
 			// Add placeholder if any messages were dropped
 			if droppedLevel2 > 0 {
 				result = append(result, sharedutil.Message{
-					Role:    "system",
-					Content: fmt.Sprintf("[%d earlier messages have been condensed due to context window limits]", droppedLevel2),
+					Role:    "user",
+					Content: fmt.Sprintf("[Context: Previous %d messages were condensed due to context limits. You were in the middle of a workflow - if you need to resume, re-read the relevant skill's SKILL.md file to restore context. Last goal: query all namespaces for the requested resource.]", droppedLevel2),
 				})
 			}
 			// Use compressed messages if available, otherwise use original messages
@@ -208,7 +208,7 @@ func (cm *ContextManager) BuildContextMessages(
 		droppedLevel3 := startIdx
 		if droppedLevel3 > 0 {
 			result = append(result, sharedutil.Message{
-				Role:    "system",
+				Role:    "user",
 				Content: fmt.Sprintf("[%d earlier messages have been summarized into the summary above]", droppedLevel3),
 			})
 		}
@@ -228,7 +228,7 @@ func (cm *ContextManager) BuildContextMessages(
 		// No summarization, just do final token trim
 		if droppedLevel2 > 0 {
 			result = append(result, sharedutil.Message{
-				Role:    "system",
+				Role:    "user",
 				Content: fmt.Sprintf("[%d earlier messages have been condensed due to context window limits]", droppedLevel2),
 			})
 		}
@@ -489,7 +489,7 @@ func (cm *ContextManager) trimByTokenLimitWithPlaceholder(messages []sharedutil.
 	// Add placeholder if any messages were dropped
 	if droppedCount > 0 {
 		placeholder := sharedutil.Message{
-			Role:    "system",
+			Role:    "user",
 			Content: fmt.Sprintf("[%d earlier messages have been removed due to context window limits]", droppedCount),
 		}
 		// Insert after system prompt(s)
