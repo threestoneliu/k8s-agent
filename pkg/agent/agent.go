@@ -189,7 +189,7 @@ func (a *Agent) processInput(input ipc.Input, outputChan chan<- ipc.Output) {
 		return
 	}
 
-	// Build state for processing
+	// Build state for processing (now includes current user message)
 	state := NewState(clusterName, a.messages)
 
 	// Process with streaming output
@@ -221,18 +221,34 @@ func (a *Agent) processWithOutput(state *State, outputChan chan<- ipc.Output) {
 	}
 
 	// Add user message from current turn
-	a.llmMessages = append(a.llmMessages, sharedutil.Message{
-		Role:    "user",
-		Content: state.SessionMessages[len(state.SessionMessages)-1].Content,
-	})
+	log.Info("agent process: adding user message to llmMessages", "sessionMsgCount", len(state.SessionMessages))
+	if len(state.SessionMessages) == 0 {
+		log.Error("agent process: state.SessionMessages is EMPTY, cannot add user message")
+	} else {
+		a.llmMessages = append(a.llmMessages, sharedutil.Message{
+			Role:    "user",
+			Content: state.SessionMessages[len(state.SessionMessages)-1].Content,
+		})
+		log.Info("agent process: user message added", "contentLen", len(state.SessionMessages[len(state.SessionMessages)-1].Content))
+	}
+
+	// Log a.messages state before compression check
+	log.Info("agent process: a.messages state", "a_messages_count", len(a.messages), "a_llmMessages_count", len(a.llmMessages))
 
 	// Apply context compression if needed
+	log.Info("agent process: checking context compression", "llmMsgCount", len(a.llmMessages), "threshold", a.ctxManager.MessageCount())
 	if a.ctxManager != nil && len(a.llmMessages) > a.ctxManager.MessageCount() {
+		log.Info("agent process: context compression triggered", "llmMsgCount", len(a.llmMessages), "threshold", a.ctxManager.MessageCount())
 		systemPrompt := BuildSystemPrompt(state.ClusterName, a.fnExec)
 		llmMsgs, err := a.BuildContextMessagesWithSummary(systemPrompt, a.messages)
 		if err == nil {
 			a.llmMessages = llmMsgs
+			log.Info("agent process: context compression completed", "newMsgCount", len(a.llmMessages))
+		} else {
+			log.Error("agent process: context compression failed", "error", err)
 		}
+	} else {
+		log.Debug("agent process: context compression skipped", "llmMsgCount", len(a.llmMessages), "threshold", a.ctxManager.MessageCount())
 	}
 
 	log.Info("agent process started", "cluster", state.ClusterName, "messageCount", len(a.llmMessages))
@@ -667,8 +683,20 @@ func (a *Agent) BuildContextMessagesWithSummary(systemPrompt string, messages []
 		return nil, fmt.Errorf("context manager not available")
 	}
 
+	log.Info("BuildContextMessagesWithSummary called", "msgCount", len(messages))
 	ctxMgr := a.ctxManager
 	llmMessages, needsSummary, rawForSummary := ctxMgr.BuildContextMessages(systemPrompt, messages, "")
+	log.Info("BuildContextMessagesWithSummary result", "needsSummary", needsSummary, "rawForSummaryCount", len(rawForSummary), "resultMsgCount", len(llmMessages))
+
+	// Add current user message to result in ALL cases
+	if len(messages) > 0 {
+		currentMsg := messages[len(messages)-1]
+		log.Debug("BuildContextMessagesWithSummary: adding current user message", "role", currentMsg.Role, "contentLen", len(currentMsg.Content))
+		llmMessages = append(llmMessages, sharedutil.Message{
+			Role:    string(currentMsg.Role),
+			Content: currentMsg.Content,
+		})
+	}
 
 	if !needsSummary {
 		return llmMessages, nil

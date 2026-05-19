@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"github.com/threestoneliu/k8s-agent/pkg/cluster"
+	"github.com/threestoneliu/k8s-agent/pkg/log"
 	sharedutil "github.com/threestoneliu/k8s-agent/pkg/shared"
 	"strings"
 )
@@ -71,6 +72,17 @@ func (cm *ContextManager) BuildContextMessages(
 	messages []*Message,
 	summaryPrompt string,
 ) (llmMessages []sharedutil.Message, needsSummary bool, rawForSummary []*Message) {
+	log.Info("BuildContextMessages ENTRY", "msgCount", len(messages), "maxMessages", cm.config.MaxMessages, "maxTokens", cm.config.MaxTokens, "summaryEnabled", cm.config.SummaryEnabled)
+
+	// Log each message role and content length for debugging
+	for i, m := range messages {
+		contentPreview := m.Content
+		if len(contentPreview) > 50 {
+			contentPreview = contentPreview[:50] + "..."
+		}
+		log.Debug("BuildContextMessages message", "index", i, "role", m.Role, "contentLen", len(m.Content), "contentPreview", contentPreview)
+	}
+
 	result := []sharedutil.Message{
 		{Role: "system", Content: systemPrompt},
 	}
@@ -80,15 +92,21 @@ func (cm *ContextManager) BuildContextMessages(
 		estimatedTokens := estimateMessagesTokens(messages)
 		systemTokens := estimateTokens(systemPrompt)
 		if systemTokens+estimatedTokens <= cm.config.MaxTokens {
+			log.Debug("context compression: Level 0 - within limits", "msgCount", len(messages), "tokens", systemTokens+estimatedTokens)
 			for _, m := range messages {
 				result = append(result, sharedutil.Message{
 					Role:    string(m.Role),
 					Content: m.Content,
 				})
 			}
+			log.Info("BuildContextMessages EXIT - Level 0 (no compression)", "resultMsgCount", len(result), "needsSummary", false)
 			return result, false, nil
 		}
+		log.Debug("context compression: Level 0 - token limit exceeded", "msgCount", len(messages), "tokens", systemTokens+estimatedTokens, "maxTokens", cm.config.MaxTokens)
 	}
+
+	// Level 1: Interaction-based compression
+	log.Info("context compression: triggered Level 1", "msgCount", len(messages), "maxMessages", cm.config.MaxMessages, "maxTokens", cm.config.MaxTokens)
 
 	// Level 1: Interaction-based compression
 	// Parse messages to interactions and compress old ones
@@ -108,6 +126,7 @@ func (cm *ContextManager) BuildContextMessages(
 		estimatedTokens := estimateMessagesTokens(compressed)
 		systemTokens := estimateTokens(systemPrompt)
 		if systemTokens+estimatedTokens <= cm.config.MaxTokens {
+			log.Info("context compression: Level 1 sufficient", "compressedCount", len(compressed), "droppedLevel1", droppedLevel1, "tokens", systemTokens+estimatedTokens)
 			// Add placeholder if any interactions were compressed
 			if droppedLevel1 > 0 {
 				result = append(result, sharedutil.Message{
@@ -115,14 +134,23 @@ func (cm *ContextManager) BuildContextMessages(
 					Content: fmt.Sprintf("[%d msgs + %d tool calls condensed]", droppedLevel1*3, droppedLevel1),
 				})
 			}
-			for _, m := range compressed {
+			// Use compressed messages if available, otherwise use original messages
+			msgsToUse := compressed
+			if len(msgsToUse) == 0 {
+				msgsToUse = messages
+			}
+			for _, m := range msgsToUse {
 				result = append(result, sharedutil.Message{
 					Role:    string(m.Role),
 					Content: m.Content,
 				})
 			}
+			log.Info("BuildContextMessages EXIT - Level 1 (compressed)", "resultMsgCount", len(result), "needsSummary", false)
 			return result, false, nil
 		}
+		log.Debug("context compression: Level 1 token limit exceeded", "compressedCount", len(compressed), "tokens", systemTokens+estimatedTokens)
+	} else {
+		log.Debug("context compression: Level 1 message limit exceeded", "compressedCount", len(compressed), "maxMessages", cm.config.MaxMessages)
 	}
 
 	// Level 2: Medium compression - keep only recent max-messages or max-tokens
@@ -142,17 +170,24 @@ func (cm *ContextManager) BuildContextMessages(
 					Content: fmt.Sprintf("[%d earlier messages have been condensed due to context window limits]", droppedLevel2),
 				})
 			}
-			for _, m := range compressed {
+			// Use compressed messages if available, otherwise use original messages
+			msgsToUse := compressed
+			if len(msgsToUse) == 0 {
+				msgsToUse = messages
+			}
+			for _, m := range msgsToUse {
 				result = append(result, sharedutil.Message{
 					Role:    string(m.Role),
 					Content: m.Content,
 				})
 			}
+			log.Info("BuildContextMessages EXIT - Level 2 (compressed)", "resultMsgCount", len(result), "needsSummary", false)
 			return result, false, nil
 		}
 	}
 
 	// Level 3: Deep compression - generate summary if enabled
+	log.Info("context compression: entering Level 3 summary", "summaryEnabled", cm.config.SummaryEnabled, "droppedLevel2", droppedLevel2)
 	if cm.config.SummaryEnabled {
 		summary := cm.generateSummary(messages, summaryPrompt)
 		result = []sharedutil.Message{
@@ -187,6 +222,7 @@ func (cm *ContextManager) BuildContextMessages(
 
 		// Final token check
 		result = cm.trimByTokenLimitWithPlaceholder(result)
+		log.Info("BuildContextMessages EXIT - Level 3 (with summary)", "resultMsgCount", len(result), "needsSummary", true, "rawForSummaryCount", len(messages))
 		return result, true, messages
 	} else {
 		// No summarization, just do final token trim
@@ -205,6 +241,7 @@ func (cm *ContextManager) BuildContextMessages(
 		result = cm.trimByTokenLimitWithPlaceholder(result)
 	}
 
+	log.Info("BuildContextMessages EXIT - Level 3 (no summary)", "resultMsgCount", len(result), "needsSummary", false)
 	return result, false, nil
 }
 
