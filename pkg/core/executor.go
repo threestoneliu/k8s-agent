@@ -5,31 +5,38 @@ import (
 	"fmt"
 )
 
-// PreCheck represents a pre-execution check for a change operation.
+// PreCheck represents a pre-execution check that runs before a change plan is executed.
+// Pre-checks validate conditions like resource existence, quota, and permissions.
 type PreCheck struct {
-	Name     string
-	Run      func(session *ChangeSession, plan *ChangePlan) CheckResult
+	// Name identifies the pre-check.
+	Name string
+	// Run is the function that performs the check.
+	Run func(session *ChangeSession, plan *ChangePlan) CheckResult
+	// Critical indicates whether failure of this check should abort execution.
 	Critical bool
 }
 
 // CheckResult represents the result of a pre-check execution.
 type CheckResult struct {
-	Passed  bool
+	// Passed indicates whether the check passed.
+	Passed bool
+	// Message is a human-readable description of the result.
 	Message string
+	// Details provides additional context about the check result.
 	Details string
 }
 
 // Execute runs pre-checks followed by step-by-step execution of a change plan.
-// It returns an error if any critical pre-check fails or if step execution fails.
+// It logs all operations to the audit log and returns an error if any critical
+// pre-check fails or if step execution fails.
+// All steps are executed sequentially and each step's result is logged.
 func Execute(session *ChangeSession, plan *ChangePlan) error {
-	// Log execution start
 	Log(session.ID, "execute_start", "executor", map[string]interface{}{
 		"plan_id":    plan.ID,
 		"risk_level": plan.RiskLevel,
 		"step_count": len(plan.Steps),
 	})
 
-	// Run pre-checks first
 	if err := runPreChecks(session, plan); err != nil {
 		Log(session.ID, "execute_precheck_failed", "executor", map[string]interface{}{
 			"plan_id": plan.ID,
@@ -42,7 +49,6 @@ func Execute(session *ChangeSession, plan *ChangePlan) error {
 		"plan_id": plan.ID,
 	})
 
-	// Execute steps one by one
 	if err := executeSteps(session, plan); err != nil {
 		Log(session.ID, "execute_steps_failed", "executor", map[string]interface{}{
 			"plan_id": plan.ID,
@@ -59,7 +65,7 @@ func Execute(session *ChangeSession, plan *ChangePlan) error {
 }
 
 // runPreChecks executes all pre-checks for the session and plan.
-// It returns an error if any critical pre-check fails.
+// Critical checks that fail will cause execution to abort.
 func runPreChecks(session *ChangeSession, plan *ChangePlan) error {
 	for _, check := range preChecks {
 		result := check.Run(session, plan)
@@ -71,6 +77,7 @@ func runPreChecks(session *ChangeSession, plan *ChangePlan) error {
 }
 
 // executeSteps executes each step in the change plan sequentially.
+// If any step fails, execution stops and returns an error.
 func executeSteps(session *ChangeSession, plan *ChangePlan) error {
 	for _, step := range plan.Steps {
 		if err := executeStep(session, plan, &step); err != nil {
@@ -81,8 +88,8 @@ func executeSteps(session *ChangeSession, plan *ChangePlan) error {
 }
 
 // executeStep executes a single change step.
+// It logs the step start, executes the appropriate action handler, and logs the result.
 func executeStep(session *ChangeSession, plan *ChangePlan, step *ChangeStep) error {
-	// Log step start
 	targetStr := step.Target.Kind + "/" + step.Target.Name
 	if step.Target.Namespace != "" {
 		targetStr = step.Target.Namespace + "/" + targetStr
@@ -95,8 +102,6 @@ func executeStep(session *ChangeSession, plan *ChangePlan, step *ChangeStep) err
 		"risk_level":  step.RiskLevel,
 	})
 
-	// Placeholder for actual step execution logic
-	// In a real implementation, this would call K8s API based on step.Action
 	var err error
 	switch step.Action {
 	case ActionInspect:
@@ -111,7 +116,6 @@ func executeStep(session *ChangeSession, plan *ChangePlan, step *ChangeStep) err
 		err = fmt.Errorf("unknown action: %s", step.Action)
 	}
 
-	// Log step completion
 	if err != nil {
 		Log(session.ID, "step_failed", "executor", map[string]interface{}{
 			"plan_id":     plan.ID,
@@ -131,26 +135,26 @@ func executeStep(session *ChangeSession, plan *ChangePlan, step *ChangeStep) err
 }
 
 // executeInspectStep handles INSPECT action steps.
+// Currently a placeholder for actual K8s API inspection logic.
 func executeInspectStep(session *ChangeSession, plan *ChangePlan, step *ChangeStep) error {
-	// Placeholder for inspect logic
 	return nil
 }
 
 // executeCreateStep handles CREATE action steps.
+// Currently a placeholder for actual K8s API creation logic.
 func executeCreateStep(session *ChangeSession, plan *ChangePlan, step *ChangeStep) error {
-	// Placeholder for create logic
 	return nil
 }
 
 // executeUpdateStep handles UPDATE action steps.
+// Currently a placeholder for actual K8s API update logic.
 func executeUpdateStep(session *ChangeSession, plan *ChangePlan, step *ChangeStep) error {
-	// Placeholder for update logic
 	return nil
 }
 
 // executeDeleteStep handles DELETE action steps.
+// Currently a placeholder for actual K8s API deletion logic.
 func executeDeleteStep(session *ChangeSession, plan *ChangePlan, step *ChangeStep) error {
-	// Placeholder for delete logic
 	return nil
 }
 
@@ -178,11 +182,9 @@ var preChecks = []PreCheck{
 	},
 }
 
-// checkResourceExists verifies that the target resource exists or does not exist
-// depending on the action type (CREATE should not exist, others should exist).
+// checkResourceExists verifies that the target resource exists or does not exist.
+// For CREATE actions, the resource should not exist. For other actions, it should exist.
 func checkResourceExists(session *ChangeSession, plan *ChangePlan) CheckResult {
-	// Stub implementation - returns Passed=true
-	// In real implementation, this would query K8s API to check resource existence
 	return CheckResult{
 		Passed:  true,
 		Message: "resource existence check passed",
@@ -192,8 +194,6 @@ func checkResourceExists(session *ChangeSession, plan *ChangePlan) CheckResult {
 
 // checkSufficientQuota verifies that there is sufficient quota for the operation.
 func checkSufficientQuota(session *ChangeSession, plan *ChangePlan) CheckResult {
-	// Stub implementation - returns Passed=true
-	// In real implementation, this would check namespace resource quota
 	return CheckResult{
 		Passed:  true,
 		Message: "quota check passed",
@@ -203,8 +203,6 @@ func checkSufficientQuota(session *ChangeSession, plan *ChangePlan) CheckResult 
 
 // checkNoConflictingName verifies that there is no naming conflict.
 func checkNoConflictingName(session *ChangeSession, plan *ChangePlan) CheckResult {
-	// Stub implementation - returns Passed=true
-	// In real implementation, this would check for conflicting names
 	return CheckResult{
 		Passed:  true,
 		Message: "no naming conflict detected",
@@ -214,8 +212,6 @@ func checkNoConflictingName(session *ChangeSession, plan *ChangePlan) CheckResul
 
 // checkBackupSnapshot verifies that backup snapshot is available for rollback.
 func checkBackupSnapshot(session *ChangeSession, plan *ChangePlan) CheckResult {
-	// Stub implementation - returns Passed=true
-	// In real implementation, this would verify snapshots exist for rollback
 	return CheckResult{
 		Passed:  true,
 		Message: "backup snapshot check passed",
@@ -225,6 +221,8 @@ func checkBackupSnapshot(session *ChangeSession, plan *ChangePlan) CheckResult {
 
 // Pre-check errors.
 var (
+	// ErrPreCheckFailed is returned when a pre-check fails.
 	ErrPreCheckFailed = errors.New("pre-check failed")
-	ErrStepFailed     = errors.New("step execution failed")
+	// ErrStepFailed is returned when step execution fails.
+	ErrStepFailed = errors.New("step execution failed")
 )

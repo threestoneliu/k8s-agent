@@ -7,23 +7,32 @@ import (
 )
 
 // DetailedFieldChange represents a single field change between two resource states.
+// The Path is a list of path components leading to the changed field.
 type DetailedFieldChange struct {
-	Path     []string      // JSON path to the changed field
-	OldValue interface{}
-	NewValue interface{}
+	// Path is the JSON path to the changed field as a list of path components.
+	Path []string `json:"path"`
+	// OldValue is the value before the change (nil if field was added).
+	OldValue interface{} `json:"oldValue"`
+	// NewValue is the value after the change (nil if field was removed).
+	NewValue interface{} `json:"newValue"`
 }
 
 // DetailedResourceDiff represents the difference between two versions of a resource.
-// This is a more detailed diff than the basic ResourceDiff used in planning.
+// It provides field-level change information for detailed comparison.
 type DetailedResourceDiff struct {
-	ResourceID ResourceID                     // References ResourceID from rollback.go
-	Before     *unstructured.Unstructured
-	After      *unstructured.Unstructured
-	Changes    []DetailedFieldChange
+	// ResourceID identifies the resource this diff applies to.
+	ResourceID ResourceID `json:"resourceID"`
+	// Before is the resource state before the change.
+	Before *unstructured.Unstructured `json:"before"`
+	// After is the resource state after the change.
+	After *unstructured.Unstructured `json:"after"`
+	// Changes is the list of field-level changes detected.
+	Changes []DetailedFieldChange `json:"changes"`
 }
 
 // CalculateDiff computes the differences between two unstructured Kubernetes objects.
-// It returns a DetailedResourceDiff with all field-level changes identified.
+// It performs deep comparison of the object structures and returns a DetailedResourceDiff
+// with all field-level changes identified. Either before or after can be nil, but not both.
 func CalculateDiff(before, after *unstructured.Unstructured) *DetailedResourceDiff {
 	if before == nil && after == nil {
 		return &DetailedResourceDiff{Changes: []DetailedFieldChange{}}
@@ -71,7 +80,6 @@ func compareValues(prefix string, oldVal, newVal interface{}) []DetailedFieldCha
 	newMap, newIsMap := newVal.(map[string]interface{})
 
 	if oldIsMap && newIsMap {
-		// Both are maps - compare keys
 		allKeys := make(map[string]bool)
 		for k := range oldMap {
 			allKeys[k] = true
@@ -90,21 +98,18 @@ func compareValues(prefix string, oldVal, newVal interface{}) []DetailedFieldCha
 			newField, newExists := newMap[key]
 
 			if !oldExists {
-				// Field was added
 				changes = append(changes, DetailedFieldChange{
 					Path:     parsePath(path),
 					OldValue: nil,
 					NewValue: newField,
 				})
 			} else if !newExists {
-				// Field was removed
 				changes = append(changes, DetailedFieldChange{
 					Path:     parsePath(path),
 					OldValue: oldField,
 					NewValue: nil,
 				})
 			} else {
-				// Both exist - recurse
 				nestedChanges := compareValues(path, oldField, newField)
 				changes = append(changes, nestedChanges...)
 			}
@@ -112,13 +117,10 @@ func compareValues(prefix string, oldVal, newVal interface{}) []DetailedFieldCha
 		return changes
 	}
 
-	// Handle slices
 	oldSlice, oldIsSlice := oldVal.([]interface{})
 	newSlice, newIsSlice := newVal.([]interface{})
 
 	if oldIsSlice && newIsSlice {
-		// For slices, compare element by element if lengths are the same
-		// Otherwise, treat as a complete replacement
 		if len(oldSlice) == len(newSlice) {
 			for i := range oldSlice {
 				path := prefix + "[" + string(rune('0'+i)) + "]"
@@ -127,7 +129,6 @@ func compareValues(prefix string, oldVal, newVal interface{}) []DetailedFieldCha
 			}
 			return changes
 		}
-		// Length changed - treat as complete replacement
 		if !reflect.DeepEqual(oldVal, newVal) {
 			changes = append(changes, DetailedFieldChange{
 				Path:     parsePath(prefix),
@@ -138,7 +139,6 @@ func compareValues(prefix string, oldVal, newVal interface{}) []DetailedFieldCha
 		return changes
 	}
 
-	// Handle case where one is slice and other is not
 	if (oldIsSlice || newIsSlice) && !reflect.DeepEqual(oldVal, newVal) {
 		changes = append(changes, DetailedFieldChange{
 			Path:     parsePath(prefix),
@@ -148,7 +148,6 @@ func compareValues(prefix string, oldVal, newVal interface{}) []DetailedFieldCha
 		return changes
 	}
 
-	// Base case - compare values
 	if !reflect.DeepEqual(oldVal, newVal) {
 		changes = append(changes, DetailedFieldChange{
 			Path:     parsePath(prefix),

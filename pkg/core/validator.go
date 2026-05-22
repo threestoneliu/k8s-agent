@@ -2,70 +2,78 @@ package core
 
 import "fmt"
 
-// Action represents the type of operation being performed.
+// Action represents the type of Kubernetes operation being performed.
+// Actions drive the change management workflow and determine execution behavior.
 type Action string
 
 // Action constants for change operations.
 const (
-	ActionCreate  Action = "CREATE"
-	ActionUpdate  Action = "UPDATE"
-	ActionDelete  Action = "DELETE"
+	// ActionCreate creates a new Kubernetes resource.
+	ActionCreate Action = "CREATE"
+	// ActionUpdate modifies an existing Kubernetes resource.
+	ActionUpdate Action = "UPDATE"
+	// ActionDelete removes a Kubernetes resource.
+	ActionDelete Action = "DELETE"
+	// ActionInspect reads and displays Kubernetes resource information.
 	ActionInspect Action = "INSPECT"
 )
 
-// RiskLevel represents the risk level of an operation.
+// RiskLevel represents the risk level associated with an operation.
+// Higher risk levels require additional justification and pre-checks.
 type RiskLevel string
 
 // RiskLevel constants.
 const (
-	RiskLow      RiskLevel = "LOW"
-	RiskMedium   RiskLevel = "MEDIUM"
-	RiskHigh     RiskLevel = "HIGH"
-	RiskCritical RiskLevel = "CRITICAL"
+	RiskLow      RiskLevel = "LOW"      // Safe operations with minimal impact
+	RiskMedium   RiskLevel = "MEDIUM"   // Operations with moderate impact
+	RiskHigh     RiskLevel = "HIGH"     // Operations with significant impact
+	RiskCritical RiskLevel = "CRITICAL" // Operations affecting critical infrastructure
 )
 
-// ResourceTarget identifies the target resource for an operation.
+// ResourceTarget identifies the target Kubernetes resource for an operation.
+// All fields must be properly set for the operation to be valid.
 type ResourceTarget struct {
-	Name       string
-	Kind       string
-	Namespace  string
+	// Name is the name of the target resource.
+	Name string
+	// Kind is the Kubernetes resource kind (e.g., "Deployment", "Service").
+	Kind string
+	// Namespace is the namespace of the resource (empty for cluster-scoped resources).
+	Namespace string
+	// APIVersion is the API version of the resource (e.g., "apps/v1").
 	APIVersion string
 }
 
 // ParsedIntent represents a parsed user intent for a Kubernetes operation.
+// It contains all the information needed to create a ChangePlan.
 type ParsedIntent struct {
-	Action    Action
-	Target    ResourceTarget
-	Params    map[string]interface{}
+	// Action is the type of operation to perform.
+	Action Action
+	// Target identifies the target resource for the operation.
+	Target ResourceTarget
+	// Params contains additional operation-specific parameters.
+	Params map[string]interface{}
+	// RiskLevel is the assessed risk level for the operation.
 	RiskLevel RiskLevel
-	Reason    string
+	// Reason provides justification for high-risk operations.
+	Reason string
 }
 
-// ClarifyQuestion represents a question to clarify incomplete intent.
+// ClarifyQuestion represents a question to clarify incomplete or ambiguous intent.
+// When ValidateIntent returns a ClarifyQuestion, the workflow pauses until
+// the user provides the missing information.
 type ClarifyQuestion struct {
-	Field    string
+	// Field is the name of the field that needs clarification.
+	Field string
+	// Question is the text of the question to present to the user.
 	Question string
-	Options  []string
+	// Options are available answer choices (empty if free-form input).
+	Options []string
+	// Required indicates whether an answer is mandatory to proceed.
 	Required bool
 }
 
-// validActions contains all valid action values.
-var validActions = map[Action]bool{
-	ActionCreate:  true,
-	ActionUpdate:  true,
-	ActionDelete: true,
-	ActionInspect: true,
-}
-
-// validRiskLevels contains all valid risk level values.
-var validRiskLevels = map[RiskLevel]bool{
-	RiskLow:      true,
-	RiskMedium:   true,
-	RiskHigh:     true,
-	RiskCritical: true,
-}
-
 // namespacedKinds contains Kubernetes kinds that are namespaced.
+// Namespaced resources require a Namespace field in ResourceTarget.
 var namespacedKinds = map[string]bool{
 	"Deployment":             true,
 	"Service":                true,
@@ -89,49 +97,54 @@ var namespacedKinds = map[string]bool{
 }
 
 // ValidateIntent validates a ParsedIntent and returns a ClarifyQuestion if validation fails.
-// Returns nil if the intent is valid and ready for processing.
+// Returns nil if the intent is valid and ready for planning.
+// Validation checks include: valid action, required target fields, namespace requirements,
+// and reason requirements for high-risk operations.
 func ValidateIntent(intent *ParsedIntent) *ClarifyQuestion {
-	// Validate Action
+	if intent == nil {
+		return &ClarifyQuestion{
+			Field:    "intent",
+			Question: "intent is required",
+			Required: true,
+		}
+	}
+
 	if !validActions[intent.Action] {
 		return &ClarifyQuestion{
 			Field:    "action",
-			Question: fmt.Sprintf("无效的操作类型: %s，有效值为: CREATE, UPDATE, DELETE, INSPECT", intent.Action),
+			Question: fmt.Sprintf("invalid action type: %s, valid values are: CREATE, UPDATE, DELETE, INSPECT", intent.Action),
 			Required: true,
 		}
 	}
 
-	// Validate Target.Kind is required
 	if intent.Target.Kind == "" {
 		return &ClarifyQuestion{
 			Field:    "target.kind",
-			Question: "目标资源的 Kind 是什么？（例如：Deployment, Service, Pod）",
+			Question: "what is the resource kind? (e.g., Deployment, Service, Pod)",
 			Required: true,
 		}
 	}
 
-	// Target.Name is required for UPDATE/DELETE/INSPECT
 	if intent.Action != ActionCreate && intent.Target.Name == "" {
 		return &ClarifyQuestion{
 			Field:    "target.name",
-			Question: "目标资源的名称是什么？",
+			Question: "what is the resource name?",
 			Required: true,
 		}
 	}
 
-	// Target.Namespace is required if Kind is namespaced
 	if namespacedKinds[intent.Target.Kind] && intent.Target.Namespace == "" {
 		return &ClarifyQuestion{
 			Field:    "target.namespace",
-			Question: "目标 namespace 是哪个？",
+			Question: "which namespace?",
 			Required: true,
 		}
 	}
 
-	// Reason is required if RiskLevel >= HIGH
 	if (intent.RiskLevel == RiskHigh || intent.RiskLevel == RiskCritical) && intent.Reason == "" {
 		return &ClarifyQuestion{
 			Field:    "reason",
-			Question: "这个操作的原因是什么？（高风险操作需要明确原因）",
+			Question: "what is the reason for this operation? (high-risk operations require justification)",
 			Required: true,
 		}
 	}
@@ -139,20 +152,21 @@ func ValidateIntent(intent *ParsedIntent) *ClarifyQuestion {
 	return nil
 }
 
-// DefaultRiskLevel returns the default risk level for an operation based on action and params.
+// DefaultRiskLevel returns the default risk level for an operation based on action type.
+// These defaults can be overridden by explicit risk assessment.
 func DefaultRiskLevel(intent *ParsedIntent) RiskLevel {
+	if intent == nil {
+		return RiskLow
+	}
+
 	switch intent.Action {
 	case ActionCreate:
-		// CREATE with standard params defaults to LOW
 		return RiskLow
 	case ActionUpdate:
-		// UPDATE to status/scale or spec/label/annotation defaults to MEDIUM
 		return RiskMedium
 	case ActionDelete:
-		// DELETE any resource defaults to HIGH
 		return RiskHigh
 	case ActionInspect:
-		// INSPECT is typically low risk
 		return RiskLow
 	default:
 		return RiskLow
@@ -160,6 +174,15 @@ func DefaultRiskLevel(intent *ParsedIntent) RiskLevel {
 }
 
 // IsNamespacedKind returns true if the given Kind is a namespaced resource.
+// Namespaced resources must include a Namespace in their ResourceTarget.
 func IsNamespacedKind(kind string) bool {
 	return namespacedKinds[kind]
+}
+
+// validActions contains all valid action values.
+var validActions = map[Action]bool{
+	ActionCreate:  true,
+	ActionUpdate:  true,
+	ActionDelete: true,
+	ActionInspect: true,
 }

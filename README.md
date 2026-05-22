@@ -9,6 +9,7 @@ A conversational Kubernetes CLI tool powered by LLM with natural language interf
 - **Function calling** - LLM calls Kubernetes APIs directly via function definitions
 - **Interactive TUI** - Bubble Tea-based terminal interface with streaming responses
 - **Table format output** - kubectl-style compact table format, reduces LLM context usage
+- **Change management** - Structured workflow for planning, reviewing, and executing Kubernetes changes with rollback support
 
 ## Installation
 
@@ -161,6 +162,23 @@ redis-7d8f9f6e4-xyz34     1/1     Running   10d
 ```
 
 This reduces LLM context usage by ~90% for large resource lists.
+
+### Change Management Workflow
+
+k8s-agent provides a structured workflow for managing Kubernetes changes:
+
+1. **Parse** - Natural language input is parsed into structured intent
+2. **Clarify** - If intent is incomplete, user is asked for clarification
+3. **Plan** - System generates an execution plan with steps and risk assessment
+4. **Review** - User reviews the plan before it executes
+5. **Execute** - Approved changes are executed step-by-step
+6. **Rollback** - If something goes wrong, changes can be rolled back
+
+The workflow includes:
+- **Risk assessment** - Operations are classified as LOW, MEDIUM, HIGH, or CRITICAL risk
+- **Pre-checks** - Validation before execution (resource existence, quota, permissions)
+- **Snapshot/rollback** - State capture before mutations for potential rollback
+- **Audit logging** - All state transitions and actions are logged
 
 ## Skills
 

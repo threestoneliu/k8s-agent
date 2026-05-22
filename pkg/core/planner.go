@@ -6,37 +6,61 @@ import (
 )
 
 // ChangeStep represents a single step in a change plan.
+// Each step defines an action to perform on a target resource.
 type ChangeStep struct {
-	Seq        int         `json:"seq"`
-	Action     Action      `json:"action"`
-	Target     ResourceTarget `json:"target"`
-	RiskLevel  RiskLevel   `json:"riskLevel"`
-	CanRollback bool       `json:"canRollback"`
-	Validate   string      `json:"validate"`
-	Description string     `json:"description"`
+	// Seq is the sequence number of this step in the plan (1-indexed).
+	Seq int `json:"seq"`
+	// Action is the type of operation to perform.
+	Action Action `json:"action"`
+	// Target identifies the resource this step operates on.
+	Target ResourceTarget `json:"target"`
+	// RiskLevel is the risk level of this specific step.
+	RiskLevel RiskLevel `json:"riskLevel"`
+	// CanRollback indicates whether this step can be rolled back.
+	CanRollback bool `json:"canRollback"`
+	// Validate is the validation check to run before executing.
+	Validate string `json:"validate"`
+	// Description is a human-readable description of this step.
+	Description string `json:"description"`
 }
 
 // ChangePlan represents a complete plan for executing a change operation.
+// It contains all steps, pre-checks, and rollback information needed
+// to safely execute and potentially undo the change.
 type ChangePlan struct {
-	ID            string      `json:"id"`
-	Summary       string      `json:"summary"`
-	Steps         []ChangeStep `json:"steps"`
-	PreCheck      []string    `json:"preCheck"`
-	RollbackPlan  []ChangeStep `json:"rollbackPlan"`
-	RiskLevel     RiskLevel   `json:"riskLevel"`
-	Impact        string      `json:"impact"`
-	Duration      time.Duration `json:"duration"`
+	// ID uniquely identifies this plan.
+	ID string `json:"id"`
+	// Summary is a human-readable summary of the change.
+	Summary string `json:"summary"`
+	// Steps are the ordered list of steps to execute.
+	Steps []ChangeStep `json:"steps"`
+	// PreCheck lists the pre-execution validation checks to run.
+	PreCheck []string `json:"preCheck"`
+	// RollbackPlan describes how to undo the change if needed.
+	RollbackPlan []ChangeStep `json:"rollbackPlan"`
+	// RiskLevel is the overall risk level of the change.
+	RiskLevel RiskLevel `json:"riskLevel"`
+	// Impact describes the expected impact of the change.
+	Impact string `json:"impact"`
+	// Duration is the estimated time to complete the change.
+	Duration time.Duration `json:"duration"`
 }
 
 // ResourceDiff represents the difference between current and desired resource state.
+// It is used to display what changes will be made before execution.
 type ResourceDiff struct {
-	HasChanges  bool            `json:"hasChanges"`
-	ChangedFields []string      `json:"changedFields"`
-	OldValues  map[string]interface{} `json:"oldValues"`
-	NewValues  map[string]interface{} `json:"newValues"`
+	// HasChanges indicates whether any differences exist.
+	HasChanges bool `json:"hasChanges"`
+	// ChangedFields lists the fields that differ.
+	ChangedFields []string `json:"changedFields"`
+	// OldValues contains the current values of changed fields.
+	OldValues map[string]interface{} `json:"oldValues"`
+	// NewValues contains the desired values of changed fields.
+	NewValues map[string]interface{} `json:"newValues"`
 }
 
 // GeneratePlan creates a ChangePlan from a ParsedIntent.
+// The plan includes all steps, pre-checks, rollback plan, and risk assessment.
 func GeneratePlan(intent ParsedIntent) *ChangePlan {
 	plan := &ChangePlan{
 		ID:        generatePlanID(),
@@ -53,12 +77,13 @@ func GeneratePlan(intent ParsedIntent) *ChangePlan {
 	return plan
 }
 
-// generatePlanID generates a unique plan ID.
+// generatePlanID generates a unique plan ID based on timestamp.
 func generatePlanID() string {
 	return fmt.Sprintf("plan-%d", time.Now().UnixNano())
 }
 
-// generateSteps generates the steps for the plan based on the intent.
+// generateSteps generates the execution steps for the plan based on the intent.
+// Different actions (CREATE, UPDATE, DELETE, INSPECT) have different step sequences.
 func generateSteps(intent ParsedIntent) []ChangeStep {
 	var steps []ChangeStep
 
@@ -100,7 +125,7 @@ func generateSteps(intent ParsedIntent) []ChangeStep {
 	return steps
 }
 
-// generatePreChecks generates pre-check items for the plan.
+// generatePreChecks generates pre-check items for the plan based on action type.
 func generatePreChecks(intent ParsedIntent) []string {
 	checks := []string{
 		"validate-kubernetes-connection",
@@ -120,16 +145,16 @@ func generatePreChecks(intent ParsedIntent) []string {
 }
 
 // generateRollbackPlan generates the rollback plan based on the intent and steps.
+// INSPECT operations don't need rollback. DELETE operations cannot typically be rolled back.
 func generateRollbackPlan(intent ParsedIntent, steps []ChangeStep) []ChangeStep {
 	if intent.Action == ActionInspect {
-		return nil // Inspect operations don't need rollback
+		return nil
 	}
 
 	if intent.Action == ActionDelete {
-		return nil // Delete operations typically cannot be rolled back
+		return nil
 	}
 
-	// For CREATE: rollback means deleting what was created
 	if intent.Action == ActionCreate {
 		return []ChangeStep{
 			{Seq: 1, Action: ActionDelete, Target: intent.Target, RiskLevel: RiskMedium, CanRollback: false,
@@ -137,8 +162,6 @@ func generateRollbackPlan(intent ParsedIntent, steps []ChangeStep) []ChangeStep 
 		}
 	}
 
-	// For UPDATE: rollback means reverting to captured state
-	// Note: In a real implementation, this would include the captured old values
 	return []ChangeStep{
 		{Seq: 1, Action: ActionUpdate, Target: intent.Target, RiskLevel: RiskMedium, CanRollback: false,
 			Validate: "revert-changes", Description: "Revert to previous resource state"},
@@ -208,7 +231,6 @@ func CalculateResourceDiff(current, desired map[string]interface{}) ResourceDiff
 		}
 	}
 
-	// Check for removed fields
 	for key, oldVal := range current {
 		if _, exists := desired[key]; !exists {
 			diff.HasChanges = true
@@ -258,13 +280,13 @@ func mapsEqual(a, b map[string]interface{}) bool {
 }
 
 // AssessRiskLevel determines the risk level based on action and target.
+// It increases risk for critical resources (Node, PV, etc.) and cluster-scoped resources.
 func AssessRiskLevel(intent ParsedIntent) RiskLevel {
 	risk := intent.RiskLevel
 	if risk != "" {
 		return risk
 	}
 
-	// Apply default risk levels based on action type
 	switch intent.Action {
 	case ActionCreate:
 		risk = RiskLow
@@ -276,7 +298,6 @@ func AssessRiskLevel(intent ParsedIntent) RiskLevel {
 		risk = RiskLow
 	}
 
-	// Increase risk for critical resources
 	criticalKinds := map[string]bool{
 		"Node":                   true,
 		"PersistentVolume":       true,
@@ -298,7 +319,6 @@ func AssessRiskLevel(intent ParsedIntent) RiskLevel {
 		}
 	}
 
-	// Increase risk for cluster-scoped resources being modified
 	if !IsNamespacedKind(intent.Target.Kind) && intent.Action != ActionInspect {
 		switch risk {
 		case RiskLow:

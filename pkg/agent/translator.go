@@ -8,6 +8,8 @@ import (
 )
 
 // PlanToNaturalLanguage converts a ChangePlan to human-readable Chinese text.
+// It formats the plan's ID, summary, risk level, impact, duration, pre-checks,
+// steps, and rollback plan into a readable string representation.
 func PlanToNaturalLanguage(plan *core.ChangePlan) string {
 	if plan == nil {
 		return "（空计划）"
@@ -15,29 +17,23 @@ func PlanToNaturalLanguage(plan *core.ChangePlan) string {
 
 	var sb strings.Builder
 
-	// Plan header
 	sb.WriteString("=== 变更计划 ===\n\n")
 
-	// Plan ID and summary
 	sb.WriteString(fmt.Sprintf("计划ID: %s\n", plan.ID))
 	if plan.Summary != "" {
 		sb.WriteString(fmt.Sprintf("概要: %s\n", plan.Summary))
 	}
 
-	// Risk level
 	sb.WriteString(fmt.Sprintf("风险等级: %s\n", plan.RiskLevel))
 
-	// Impact
 	if plan.Impact != "" {
 		sb.WriteString(fmt.Sprintf("影响范围: %s\n", plan.Impact))
 	}
 
-	// Duration
 	if plan.Duration > 0 {
 		sb.WriteString(fmt.Sprintf("预计耗时: %v\n", plan.Duration))
 	}
 
-	// Pre-check items
 	if len(plan.PreCheck) > 0 {
 		sb.WriteString("\n--- 执行前检查 ---\n")
 		for _, check := range plan.PreCheck {
@@ -45,7 +41,6 @@ func PlanToNaturalLanguage(plan *core.ChangePlan) string {
 		}
 	}
 
-	// Change steps
 	if len(plan.Steps) > 0 {
 		sb.WriteString("\n--- 变更步骤 ---\n")
 		for _, step := range plan.Steps {
@@ -66,7 +61,6 @@ func PlanToNaturalLanguage(plan *core.ChangePlan) string {
 		}
 	}
 
-	// Rollback plan
 	if len(plan.RollbackPlan) > 0 {
 		sb.WriteString("\n--- 回滚计划 ---\n")
 		for _, step := range plan.RollbackPlan {
@@ -82,6 +76,7 @@ func PlanToNaturalLanguage(plan *core.ChangePlan) string {
 }
 
 // DiffToNaturalLanguage converts a ResourceDiff to human-readable Chinese text.
+// It shows whether there are changes and lists the changed fields with old and new values.
 func DiffToNaturalLanguage(diff *core.ResourceDiff) string {
 	if diff == nil {
 		return "（空差异）"
@@ -98,7 +93,6 @@ func DiffToNaturalLanguage(diff *core.ResourceDiff) string {
 
 	sb.WriteString("状态: 有变化\n")
 
-	// Changed fields
 	if len(diff.ChangedFields) > 0 {
 		sb.WriteString("\n--- 变更的字段 ---\n")
 		for _, field := range diff.ChangedFields {
@@ -106,7 +100,6 @@ func DiffToNaturalLanguage(diff *core.ResourceDiff) string {
 		}
 	}
 
-	// Old values
 	if len(diff.OldValues) > 0 {
 		sb.WriteString("\n--- 原值 ---\n")
 		for field, value := range diff.OldValues {
@@ -114,7 +107,6 @@ func DiffToNaturalLanguage(diff *core.ResourceDiff) string {
 		}
 	}
 
-	// New values
 	if len(diff.NewValues) > 0 {
 		sb.WriteString("\n--- 新值 ---\n")
 		for field, value := range diff.NewValues {
@@ -168,7 +160,7 @@ func targetToChinese(target core.ResourceTarget) string {
 	return desc
 }
 
-// formatValue formats a value for display.
+// formatValue formats a value for display in diff output.
 func formatValue(value interface{}) string {
 	if value == nil {
 		return "<空>"

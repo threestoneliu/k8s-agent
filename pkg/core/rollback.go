@@ -10,16 +10,21 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// ResourceID identifies a Kubernetes resource for snapshot/rollback operations.
-// It is derived from the resource's identity fields.
+// ResourceID identifies a Kubernetes resource for snapshot and rollback operations.
+// It is composed of the resource's core identity fields.
 type ResourceID struct {
-	Name       string `json:"name"`
-	Kind       string `json:"kind"`
-	Namespace  string `json:"namespace"`
+	// Name is the name of the resource.
+	Name string `json:"name"`
+	// Kind is the Kubernetes resource kind (e.g., "Deployment").
+	Kind string `json:"kind"`
+	// Namespace is the namespace for namespaced resources (empty for cluster-scoped).
+	Namespace string `json:"namespace"`
+	// APIVersion is the API version (e.g., "apps/v1").
 	APIVersion string `json:"apiVersion"`
 }
 
 // String returns a string representation of the ResourceID.
+// Format: "namespace/kind/name.apiversion" or "kind/name.apiversion" for cluster-scoped.
 func (r ResourceID) String() string {
 	if r.Namespace != "" {
 		return fmt.Sprintf("%s/%s/%s.%s", r.Namespace, r.Kind, r.Name, r.APIVersion)
@@ -28,12 +33,18 @@ func (r ResourceID) String() string {
 }
 
 // Snapshot represents a point-in-time capture of a Kubernetes resource state.
+// Snapshots are used to enable rollback of changes if something goes wrong.
 type Snapshot struct {
-	ID         string                    `json:"id"`
-	SessionID  string                    `json:"sessionID"`
-	ResourceID ResourceID                `json:"resourceID"`
-	Object     *unstructured.Unstructured `json:"object"`
-	CreatedAt  time.Time                `json:"createdAt"`
+	// ID uniquely identifies this snapshot.
+	ID string `json:"id"`
+	// SessionID is the ID of the session that created this snapshot.
+	SessionID string `json:"sessionID"`
+	// ResourceID identifies the resource this snapshot captures.
+	ResourceID ResourceID `json:"resourceID"`
+	// Object is the captured resource state.
+	Object *unstructured.Unstructured `json:"object"`
+	// CreatedAt is when the snapshot was taken.
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // String returns a string representation of the Snapshot.
@@ -42,34 +53,24 @@ func (s *Snapshot) String() string {
 		s.ID, s.SessionID, s.ResourceID.String(), s.CreatedAt.Format(time.RFC3339))
 }
 
-// snapshotStore provides in-memory storage for snapshots.
-type snapshotStore struct {
-	mu         sync.RWMutex
-	snapshots  map[string][]*Snapshot // key: sessionID, value: list of snapshots for that session
-	resourceIndex map[ResourceID][]*Snapshot // key: resourceID, value: list of snapshots for that resource
-}
-
-// Global snapshot store instance.
-var store = &snapshotStore{
-	snapshots:     make(map[string][]*Snapshot),
-	resourceIndex: make(map[ResourceID][]*Snapshot),
-}
-
 // Snapshot errors.
 var (
-	ErrSnapshotNotFound     = errors.New("snapshot not found")
+	// ErrSnapshotNotFound is returned when a snapshot ID does not exist.
+	ErrSnapshotNotFound = errors.New("snapshot not found")
+	// ErrNoSnapshotForResource is returned when no snapshot exists for a resource.
 	ErrNoSnapshotForResource = errors.New("no snapshot found for resource")
-	ErrNilObject            = errors.New("cannot create snapshot of nil object")
+	// ErrNilObject is returned when attempting to snapshot a nil object.
+	ErrNilObject = errors.New("cannot create snapshot of nil object")
 )
 
 // CreateSnapshot creates a new snapshot of the given Kubernetes resource.
 // It captures the current state of the object for potential rollback later.
+// The snapshot is stored in memory and indexed by both session ID and resource ID.
 func CreateSnapshot(sessionID string, resource ResourceID, obj *unstructured.Unstructured) (*Snapshot, error) {
 	if obj == nil {
 		return nil, ErrNilObject
 	}
 
-	// Deep copy the object to preserve its state
 	copiedObj := obj.DeepCopy()
 
 	snapshot := &Snapshot{
@@ -83,16 +84,14 @@ func CreateSnapshot(sessionID string, resource ResourceID, obj *unstructured.Uns
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	// Add to session-based index
 	store.snapshots[sessionID] = append(store.snapshots[sessionID], snapshot)
-
-	// Add to resource-based index for lookup
 	store.resourceIndex[resource] = append(store.resourceIndex[resource], snapshot)
 
 	return snapshot, nil
 }
 
 // GetSnapshot retrieves a snapshot by its ID.
+// Returns ErrSnapshotNotFound if no such snapshot exists.
 func GetSnapshot(snapshotID string) (*Snapshot, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
@@ -109,6 +108,7 @@ func GetSnapshot(snapshotID string) (*Snapshot, error) {
 }
 
 // GetSnapshotsForSession returns all snapshots associated with a session.
+// Returns an empty slice if the session has no snapshots.
 func GetSnapshotsForSession(sessionID string) ([]*Snapshot, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
@@ -118,13 +118,13 @@ func GetSnapshotsForSession(sessionID string) ([]*Snapshot, error) {
 		return []*Snapshot{}, nil
 	}
 
-	// Return a copy to avoid external modifications
 	result := make([]*Snapshot, len(snapshots))
 	copy(result, snapshots)
 	return result, nil
 }
 
 // GetLatestSnapshot returns the most recent snapshot for a given resource.
+// Returns ErrNoSnapshotForResource if no snapshots exist for the resource.
 func GetLatestSnapshot(resource ResourceID) (*Snapshot, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
@@ -134,7 +134,6 @@ func GetLatestSnapshot(resource ResourceID) (*Snapshot, error) {
 		return nil, ErrNoSnapshotForResource
 	}
 
-	// Find the latest snapshot
 	var latest *Snapshot
 	for _, s := range snapshots {
 		if latest == nil || s.CreatedAt.After(latest.CreatedAt) {
@@ -155,11 +154,9 @@ func GetSnapshotsForResource(resource ResourceID) ([]*Snapshot, error) {
 		return []*Snapshot{}, nil
 	}
 
-	// Sort by CreatedAt descending (newest first)
 	result := make([]*Snapshot, len(snapshots))
 	copy(result, snapshots)
 
-	// Simple bubble sort for small slices (snapshots per resource should be few)
 	for i := 0; i < len(result); i++ {
 		for j := i + 1; j < len(result); j++ {
 			if result[j].CreatedAt.After(result[i].CreatedAt) {
@@ -171,10 +168,10 @@ func GetSnapshotsForResource(resource ResourceID) ([]*Snapshot, error) {
 	return result, nil
 }
 
-// Rollback restores a resource to its latest snapshot state.
+// Rollback restores a resource to its latest snapshot state within a session.
 // It returns the restored object for the caller to apply.
+// Logs the rollback operation to the audit log.
 func Rollback(sessionID string, resource ResourceID) (*unstructured.Unstructured, error) {
-	// Log rollback start
 	Log(sessionID, "rollback", "rollback", map[string]interface{}{
 		"resource": resource.String(),
 	})
@@ -182,7 +179,6 @@ func Rollback(sessionID string, resource ResourceID) (*unstructured.Unstructured
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 
-	// Find the latest snapshot for this resource in this session
 	snapshots, exists := store.snapshots[sessionID]
 	if !exists {
 		Log(sessionID, "rollback_failed", "rollback", map[string]interface{}{
@@ -214,11 +210,11 @@ func Rollback(sessionID string, resource ResourceID) (*unstructured.Unstructured
 		"snapshot_id": latest.ID,
 	})
 
-	// Return a deep copy of the object for restoration
 	return latest.Object.DeepCopy(), nil
 }
 
-// RollbackToSnapshot restores a resource to a specific snapshot by ID.
+// RollbackToSnapshot restores a resource to a specific snapshot by its ID.
+// Returns the restored object for the caller to apply.
 func RollbackToSnapshot(snapshotID string) (*unstructured.Unstructured, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
@@ -244,7 +240,7 @@ func RollbackToSnapshot(snapshotID string) (*unstructured.Unstructured, error) {
 }
 
 // DeleteSnapshotsForSession removes all snapshots associated with a session.
-// This is typically called when a session is closed.
+// This is typically called when a session is closed to free memory.
 func DeleteSnapshotsForSession(sessionID string) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -254,7 +250,6 @@ func DeleteSnapshotsForSession(sessionID string) error {
 		return nil
 	}
 
-	// Remove from resource index
 	for _, s := range snapshots {
 		if resourceSnapshots, exists := store.resourceIndex[s.ResourceID]; exists {
 			var filtered []*Snapshot
@@ -271,7 +266,6 @@ func DeleteSnapshotsForSession(sessionID string) error {
 		}
 	}
 
-	// Remove from session index
 	delete(store.snapshots, sessionID)
 
 	return nil
@@ -298,4 +292,17 @@ func ClearSnapshots() {
 
 	store.snapshots = make(map[string][]*Snapshot)
 	store.resourceIndex = make(map[ResourceID][]*Snapshot)
+}
+
+// snapshotStore provides in-memory storage for snapshots.
+type snapshotStore struct {
+	mu          sync.RWMutex
+	snapshots   map[string][]*Snapshot       // key: sessionID
+	resourceIndex map[ResourceID][]*Snapshot // key: resourceID
+}
+
+// Global snapshot store instance.
+var store = &snapshotStore{
+	snapshots:     make(map[string][]*Snapshot),
+	resourceIndex: make(map[ResourceID][]*Snapshot),
 }

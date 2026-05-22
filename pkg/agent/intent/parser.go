@@ -7,6 +7,8 @@ import (
 )
 
 // ParseToIntent parses user input into a ParsedIntent structure using simple keyword extraction.
+// It recognizes action keywords (create, delete, update, inspect), resource kinds,
+// resource names, and namespaces from natural language input.
 // This is a stub implementation that will be enhanced with LLM integration later.
 func ParseToIntent(userInput string) (*core.ParsedIntent, error) {
 	if userInput == "" {
@@ -18,50 +20,37 @@ func ParseToIntent(userInput string) (*core.ParsedIntent, error) {
 		Params: make(map[string]interface{}),
 	}
 
-	// Extract action from keywords
 	intent.Action = extractAction(input)
-
-	// Extract resource kind
 	intent.Target.Kind = extractKind(input)
-
-	// Extract resource name if present
 	intent.Target.Name = extractName(input)
-
-	// Extract namespace if present
 	intent.Target.Namespace = extractNamespace(input)
-
-	// Set default risk level based on action
 	intent.RiskLevel = core.DefaultRiskLevel(intent)
 
 	return intent, nil
 }
 
-// extractAction determines the action from input keywords
+// extractAction determines the action from input keywords.
+// It checks for delete, update, create, and inspect keywords.
 func extractAction(input string) core.Action {
-	// Check for delete keywords
 	if strings.Contains(input, "delete") || strings.Contains(input, "remove") || strings.Contains(input, "删除") {
 		return core.ActionDelete
 	}
-	// Check for update keywords
 	if strings.Contains(input, "update") || strings.Contains(input, "modify") || strings.Contains(input, "修改") || strings.Contains(input, "edit") {
 		return core.ActionUpdate
 	}
-	// Check for create keywords
 	if strings.Contains(input, "create") || strings.Contains(input, "add") || strings.Contains(input, "创建") || strings.Contains(input, "新建") {
 		return core.ActionCreate
 	}
-	// Check for inspect keywords
 	if strings.Contains(input, "get") || strings.Contains(input, "list") || strings.Contains(input, "show") || strings.Contains(input, "describe") || strings.Contains(input, "inspect") || strings.Contains(input, "查看") || strings.Contains(input, "查询") {
 		return core.ActionInspect
 	}
 
-	// Default to Inspect for queries
 	return core.ActionInspect
 }
 
-// extractKind extracts the Kubernetes resource kind from input
+// extractKind extracts the Kubernetes resource kind from input.
+// It recognizes common kinds and abbreviations (e.g., "deploy" -> "Deployment").
 func extractKind(input string) string {
-	// Define common resource kind patterns
 	kindPatterns := []string{
 		"deployment", "deploy",
 		"service", "svc",
@@ -93,7 +82,7 @@ func extractKind(input string) string {
 	return ""
 }
 
-// normalizeKind converts common abbreviations to full kind names
+// normalizeKind converts common abbreviations to full kind names.
 func normalizeKind(pattern string) string {
 	kindMap := map[string]string{
 		"deploy":       "Deployment",
@@ -131,19 +120,14 @@ func normalizeKind(pattern string) string {
 	if full, ok := kindMap[pattern]; ok {
 		return full
 	}
-	// Capitalize first letter for unknown kinds
 	return strings.Title(pattern)
 }
 
-// extractName extracts resource name from input
+// extractName extracts resource name from input.
+// It looks for patterns like "named <name>", "name <name>", and Chinese patterns.
 func extractName(input string) string {
-	// Look for patterns like "named <name>", "name <name>", "<name> in namespace"
-	// or standalone words that could be resource names
-
-	// Pattern: "named <name>" or "name <name>"
 	if idx := strings.Index(input, "named "); idx != -1 {
 		name := strings.TrimSpace(input[idx+5:])
-		// Extract just the name part (stop at whitespace or punctuation)
 		name = strings.Fields(name)[0]
 		return name
 	}
@@ -153,15 +137,13 @@ func extractName(input string) string {
 		return name
 	}
 
-	// Pattern: Chinese "名为" or "名称为"
-	// Note: Chinese characters are 3 bytes each in UTF-8
 	if idx := strings.Index(input, "名为"); idx != -1 {
-		name := strings.TrimSpace(input[idx+6:]) // skip 6 bytes (2 Chinese chars)
+		name := strings.TrimSpace(input[idx+6:])
 		name = strings.Fields(name)[0]
 		return name
 	}
 	if idx := strings.Index(input, "名称为"); idx != -1 {
-		name := strings.TrimSpace(input[idx+9:]) // skip 9 bytes (3 Chinese chars)
+		name := strings.TrimSpace(input[idx+9:])
 		name = strings.Fields(name)[0]
 		return name
 	}
@@ -169,9 +151,9 @@ func extractName(input string) string {
 	return ""
 }
 
-// extractNamespace extracts namespace from input
+// extractNamespace extracts namespace from input.
+// It looks for patterns like "in namespace <ns>", "namespace <ns>", and Chinese patterns.
 func extractNamespace(input string) string {
-	// Pattern: "in namespace <ns>" or "namespace <ns>"
 	if idx := strings.Index(input, "in namespace "); idx != -1 {
 		ns := strings.TrimSpace(input[idx+12:])
 		return strings.Fields(ns)[0]
@@ -180,13 +162,12 @@ func extractNamespace(input string) string {
 		ns := strings.TrimSpace(input[idx+10:])
 		return strings.Fields(ns)[0]
 	}
-	// Chinese patterns - characters are 3 bytes each in UTF-8
 	if idx := strings.Index(input, "在命名空间"); idx != -1 {
-		ns := strings.TrimSpace(input[idx+15:]) // skip 15 bytes (5 Chinese chars)
+		ns := strings.TrimSpace(input[idx+15:])
 		return strings.Fields(ns)[0]
 	}
 	if idx := strings.Index(input, "命名空间为"); idx != -1 {
-		ns := strings.TrimSpace(input[idx+12:]) // skip 12 bytes (4 Chinese chars)
+		ns := strings.TrimSpace(input[idx+12:])
 		return strings.Fields(ns)[0]
 	}
 
