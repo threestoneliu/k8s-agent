@@ -63,28 +63,28 @@
 
 ### Task 8: Implement ResourceDiff
 
-- [ ] Create `diff.go`
-- [ ] Define ResourceDiff and FieldChange structs
-- [ ] Implement `CalculateDiff(before, after *unstructured.Unstructured) *ResourceDiff`
-- [ ] Write unit tests
+- [x] Create `diff.go`
+- [x] Define ResourceDiff and FieldChange structs
+- [x] Implement `CalculateDiff(before, after *unstructured.Unstructured) *ResourceDiff`
+- [x] Write unit tests
 
 ## Phase 4: Change Execution
 
 ### Task 9: Implement ChangeExecutor
 
-- [ ] Create `executor.go`
-- [ ] Define PreCheck struct and list
-- [ ] Implement `Execute(sessionID string) error`
-- [ ] Implement pre-check hooks
-- [ ] Implement step-by-step execution
-- [ ] Write integration tests
+- [x] Create `executor.go`
+- [x] Define PreCheck struct and list
+- [x] Implement `Execute(sessionID string) error`
+- [x] Implement pre-check hooks
+- [x] Implement step-by-step execution
+- [x] Write integration tests
 
 ### Task 10: Integrate executor with state machine
 
-- [ ] Modify EXECUTING state to call executor
-- [ ] Handle execution errors → FAILED transition
-- [ ] Handle execution success → COMPLETED transition
-- [ ] Write integration tests
+- [x] Modify EXECUTING state to call executor
+- [x] Handle execution errors → FAILED transition
+- [x] Handle execution success → COMPLETED transition
+- [x] Write integration tests
 
 ## Phase 5: Snapshot & Rollback
 
@@ -116,44 +116,44 @@
 
 ### Task 14: Integrate audit into state machine
 
-- [ ] Log all state transitions
-- [ ] Log all executor operations
-- [ ] Log rollback operations
-- [ ] Write integration tests
+- [x] Log all state transitions
+- [x] Log all executor operations
+- [x] Log rollback operations
+- [x] Write integration tests
 
 ## Phase 7: Agent Integration
 
 ### Task 15: Extend IPC protocol
 
-- [ ] Add SessionID to Output struct
-- [ ] Add State to Output struct
-- [ ] Add Plan/Diff/ClarifyQuestion to Output struct
-- [ ] Add RequiresConfirm field
+- [x] Add SessionID to Output struct
+- [x] Add State to Output struct
+- [x] Add Plan/Diff/ClarifyQuestion to Output struct
+- [x] Add RequiresConfirm field
 
 ### Task 16: Implement Agent translator
 
-- [ ] Create `pkg/agent/translator.go`
-- [ ] Implement `PlanToNaturalLanguage(plan *ChangePlan) string`
-- [ ] Implement `DiffToNaturalLanguage(diff *ResourceDiff) string`
-- [ ] Write unit tests
+- [x] Create `pkg/agent/translator.go`
+- [x] Implement `PlanToNaturalLanguage(plan *ChangePlan) string`
+- [x] Implement `DiffToNaturalLanguage(diff *ResourceDiff) string`
+- [x] Write unit tests
 
 ### Task 17: Implement Agent intent parser
 
-- [ ] Create `pkg/agent/intent/parser.go`
-- [ ] Implement `ParseToIntent(userInput string) (*ParsedIntent, error)`
-- [ ] Integrate with LLM
-- [ ] Write unit tests
+- [x] Create `pkg/agent/intent/parser.go`
+- [x] Implement `ParseToIntent(userInput string) (*ParsedIntent, error)`
+- [x] Integrate with LLM (stub implementation)
+- [x] Write unit tests
 
 ## Phase 8: Testing & Documentation
 
 ### Task 18: Integration tests
 
-- [ ] Write end-to-end test for complete flow
-- [ ] Test abort/resume/rollback flows
-- [ ] Test multi-session concurrency
+- [x] Write end-to-end test for complete flow
+- [x] Test abort/resume/rollback flows
+- [x] Test multi-session concurrency
 
 ### Task 19: Documentation
 
-- [ ] Add godoc comments to all public APIs
-- [ ] Create ARCHITECTURE.md for overall design
-- [ ] Update README with new features
+- [x] Add godoc comments to all public APIs
+- [x] Create ARCHITECTURE.md for overall design
+- [x] Update README with new features
