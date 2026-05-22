@@ -20,12 +20,18 @@ const (
 
 // Output represents a message sent from Agent to UI
 type Output struct {
-	Type        OutputType
-	Content     string
-	ToolName    string
-	ToolArgs    string
-	ToolResult  string
-	ToolSuccess bool
-	ClusterName string
-	MessageType string
+	Type            OutputType
+	Content         string
+	ToolName        string
+	ToolArgs        string
+	ToolResult      string
+	ToolSuccess     bool
+	ClusterName     string
+	MessageType     string
+	SessionID       string
+	State           string
+	Plan            interface{} // *core.ChangePlan
+	Diff            interface{} // *core.ResourceDiff
+	ClarifyQuestion interface{} // *core.ClarifyQuestion
+	RequiresConfirm bool
 }
