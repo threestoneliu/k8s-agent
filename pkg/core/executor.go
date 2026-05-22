@@ -22,15 +22,38 @@ type CheckResult struct {
 // Execute runs pre-checks followed by step-by-step execution of a change plan.
 // It returns an error if any critical pre-check fails or if step execution fails.
 func Execute(session *ChangeSession, plan *ChangePlan) error {
+	// Log execution start
+	Log(session.ID, "execute_start", "executor", map[string]interface{}{
+		"plan_id":    plan.ID,
+		"risk_level": plan.RiskLevel,
+		"step_count": len(plan.Steps),
+	})
+
 	// Run pre-checks first
 	if err := runPreChecks(session, plan); err != nil {
+		Log(session.ID, "execute_precheck_failed", "executor", map[string]interface{}{
+			"plan_id": plan.ID,
+			"error":   err.Error(),
+		})
 		return err
 	}
 
+	Log(session.ID, "execute_prechecks_passed", "executor", map[string]interface{}{
+		"plan_id": plan.ID,
+	})
+
 	// Execute steps one by one
 	if err := executeSteps(session, plan); err != nil {
+		Log(session.ID, "execute_steps_failed", "executor", map[string]interface{}{
+			"plan_id": plan.ID,
+			"error":   err.Error(),
+		})
 		return err
 	}
+
+	Log(session.ID, "execute_completed", "executor", map[string]interface{}{
+		"plan_id": plan.ID,
+	})
 
 	return nil
 }
@@ -59,20 +82,52 @@ func executeSteps(session *ChangeSession, plan *ChangePlan) error {
 
 // executeStep executes a single change step.
 func executeStep(session *ChangeSession, plan *ChangePlan, step *ChangeStep) error {
+	// Log step start
+	targetStr := step.Target.Kind + "/" + step.Target.Name
+	if step.Target.Namespace != "" {
+		targetStr = step.Target.Namespace + "/" + targetStr
+	}
+	Log(session.ID, "step_start", "executor", map[string]interface{}{
+		"plan_id":     plan.ID,
+		"step_seq":    step.Seq,
+		"step_action": step.Action,
+		"target":      targetStr,
+		"risk_level":  step.RiskLevel,
+	})
+
 	// Placeholder for actual step execution logic
 	// In a real implementation, this would call K8s API based on step.Action
+	var err error
 	switch step.Action {
 	case ActionInspect:
-		return executeInspectStep(session, plan, step)
+		err = executeInspectStep(session, plan, step)
 	case ActionCreate:
-		return executeCreateStep(session, plan, step)
+		err = executeCreateStep(session, plan, step)
 	case ActionUpdate:
-		return executeUpdateStep(session, plan, step)
+		err = executeUpdateStep(session, plan, step)
 	case ActionDelete:
-		return executeDeleteStep(session, plan, step)
+		err = executeDeleteStep(session, plan, step)
 	default:
-		return fmt.Errorf("unknown action: %s", step.Action)
+		err = fmt.Errorf("unknown action: %s", step.Action)
 	}
+
+	// Log step completion
+	if err != nil {
+		Log(session.ID, "step_failed", "executor", map[string]interface{}{
+			"plan_id":     plan.ID,
+			"step_seq":    step.Seq,
+			"step_action": step.Action,
+			"error":       err.Error(),
+		})
+	} else {
+		Log(session.ID, "step_completed", "executor", map[string]interface{}{
+			"plan_id":     plan.ID,
+			"step_seq":    step.Seq,
+			"step_action": step.Action,
+		})
+	}
+
+	return err
 }
 
 // executeInspectStep handles INSPECT action steps.

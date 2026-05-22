@@ -174,12 +174,21 @@ func GetSnapshotsForResource(resource ResourceID) ([]*Snapshot, error) {
 // Rollback restores a resource to its latest snapshot state.
 // It returns the restored object for the caller to apply.
 func Rollback(sessionID string, resource ResourceID) (*unstructured.Unstructured, error) {
+	// Log rollback start
+	Log(sessionID, "rollback", "rollback", map[string]interface{}{
+		"resource": resource.String(),
+	})
+
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 
 	// Find the latest snapshot for this resource in this session
 	snapshots, exists := store.snapshots[sessionID]
 	if !exists {
+		Log(sessionID, "rollback_failed", "rollback", map[string]interface{}{
+			"resource": resource.String(),
+			"error":    "no snapshots for session",
+		})
 		return nil, ErrNoSnapshotForResource
 	}
 
@@ -193,8 +202,17 @@ func Rollback(sessionID string, resource ResourceID) (*unstructured.Unstructured
 	}
 
 	if latest == nil {
+		Log(sessionID, "rollback_failed", "rollback", map[string]interface{}{
+			"resource": resource.String(),
+			"error":    "no snapshot found for resource",
+		})
 		return nil, ErrNoSnapshotForResource
 	}
+
+	Log(sessionID, "rollback_completed", "rollback", map[string]interface{}{
+		"resource":   resource.String(),
+		"snapshot_id": latest.ID,
+	})
 
 	// Return a deep copy of the object for restoration
 	return latest.Object.DeepCopy(), nil
@@ -205,13 +223,22 @@ func RollbackToSnapshot(snapshotID string) (*unstructured.Unstructured, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 
-	for _, snapshots := range store.snapshots {
+	for sessionID, snapshots := range store.snapshots {
 		for _, s := range snapshots {
 			if s.ID == snapshotID {
+				Log(sessionID, "rollback_to_snapshot", "rollback", map[string]interface{}{
+					"snapshot_id": snapshotID,
+					"resource":    s.ResourceID.String(),
+				})
 				return s.Object.DeepCopy(), nil
 			}
 		}
 	}
+
+	Log("", "rollback_to_snapshot_failed", "rollback", map[string]interface{}{
+		"snapshot_id": snapshotID,
+		"error":       "snapshot not found",
+	})
 
 	return nil, ErrSnapshotNotFound
 }

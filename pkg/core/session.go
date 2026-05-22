@@ -84,11 +84,20 @@ func NewChangeSession(id string) *ChangeSession {
 // Transition moves the session to a new state based on the signal.
 // It uses the standalone Transition function and updates the session state.
 func (s *ChangeSession) Transition(signal SessionSignal) error {
+	oldState := s.State
 	newState, err := Transition(s.State, signal)
 	if err != nil {
 		return err
 	}
 	s.State = newState
+
+	// Log state transition
+	Log(s.ID, "state_transition", "session", map[string]interface{}{
+		"from_state": oldState.String(),
+		"to_state":   newState.String(),
+		"signal":     signal.String(),
+	})
+
 	return nil
 }
 
